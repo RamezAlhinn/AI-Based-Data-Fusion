@@ -20,7 +20,7 @@ We use **Docker** and **VS Code Dev Containers** to ensure everyone has the exac
 
 ### 1. Clone the repository
 ```bash
-git clone https://github.com/<org>/AI-Based-Data-Fusion.git
+git clone https://github.com/RamezAlhinn/AI-Based-Data-Fusion.git
 cd AI-Based-Data-Fusion
 ```
 
