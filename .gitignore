@@ -1,0 +1,17 @@
+# ROS 2 workspace build artifacts
+ros2_ws/build/
+ros2_ws/install/
+ros2_ws/log/
+
+# Bag files
+bags/*.db3
+bags/*.mcap
+bags/*.yaml
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+
+# Environment secrets
+.env
