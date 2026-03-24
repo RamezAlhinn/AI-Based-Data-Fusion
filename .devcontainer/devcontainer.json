@@ -13,13 +13,24 @@
     "vscode": {
       "extensions": [
         "ms-python.python",
+        "ms-python.black-formatter",
         "ms-iot.vscode-ros",
         "ms-vscode.cpptools",
+        "twxs.cmake",
+        "esbenp.prettier-vscode",
         "eamodio.gitlens"
       ],
       "settings": {
         "ros.distro": "humble",
-        "python.defaultInterpreterPath": "/usr/bin/python3"
+        "python.defaultInterpreterPath": "/usr/bin/python3",
+        "editor.formatOnSave": true,
+        "[python]": {
+          "editor.defaultFormatter": "ms-python.black-formatter"
+        },
+        "[cpp]": {
+          "editor.defaultFormatter": "ms-vscode.cpptools"
+        },
+        "C_Cpp.clang_format_fallbackStyle": "{ BasedOnStyle: Google, IndentWidth: 4, ColumnLimit: 100 }"
       }
     }
   },
