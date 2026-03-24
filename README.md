@@ -4,68 +4,47 @@ A ROS 2 Humble workspace for real-time multi-sensor perception: this project fus
 
 ---
 
-## Prerequisites
+## 🛠️ Prerequisites
 
-| Tool | Version / Notes |
+We use **Docker** and **VS Code Dev Containers** to ensure everyone has the exact same ROS 2 environment, regardless of their operating system. You do **not** need to install ROS 2 natively on your machine!
+
+| Tool | Notes |
 |---|---|
-| **Docker Desktop** | ≥ 4.x · Enable GPU access in Settings → Resources → GPUs |
-| **VS Code** | Latest stable |
-| **Dev Containers extension** | `ms-vscode-remote.remote-containers` |
-| **NVIDIA drivers** (GPU host only) | 525+ recommended for CUDA 12 |
-
-> **Apple Silicon / Windows WSL2** — the Dockerfile installs a CPU-only PyTorch wheel so the container runs without an NVIDIA GPU. Remove the `--gpus all` run-arg in `devcontainer.json` if your machine has no NVIDIA card.
+| **Docker Desktop** | Latest version. *Windows users: ensure the WSL 2 backend is enabled in settings.* |
+| **Visual Studio Code** | Latest stable release. |
+| **Dev Containers Extension** | Search for `ms-vscode-remote.remote-containers` in VS Code extensions. |
 
 ---
 
-## Getting Started
+## 🚀 Getting Started
 
-1. **Clone the repository**
-   ```bash
-   git clone https://github.com/<org>/AI-Based-Data-Fusion.git
-   cd AI-Based-Data-Fusion
-   ```
-
-2. **Open in VS Code**
-   ```bash
-   code .
-   ```
-
-3. **How to Run: Open in Container**
-   The project uses **VS Code Dev Containers**. This means you don't need to install ROS 2 on your host machine — it all runs inside a Docker container managed by VS Code.
-   - When you open the folder, VS Code will ask: *"Folder contains a Dev Container configuration file. Reopen to folder to develop in a container."*
-   - Click **Reopen in Container**.
-   - **Alternative**: Click the green button in the bottom-left corner of VS Code (the "Remote" icon) and select **"Dev Containers: Reopen in Container"**.
-
-### Did we create the container?
-Yes and no! We created the **recipe** (`Dockerfile`) and the **connection settings** (`devcontainer.json`). 
-- The first time you click "Reopen in Container", VS Code **builds** the Docker image (this takes ~10–15 mins).
-- After that, it simply **starts** the existing container, which is near-instant.
-- Your code is "mounted" from your computer into the container, so any changes you make in VS Code are saved locally.
-
-### Manual Run (Terminal)
-If you prefer to run it manually from the terminal (alternative to VS Code):
+### 1. Clone the repository
 ```bash
-# Build the image first (only needed once)
-docker build -t fusion-dev -f .devcontainer/Dockerfile .
-
-# Run the container
-docker run \
-  --network=host \
-  --ipc=host \
-  --pid=host \
-  --name "fusion-dev" \
-  --gpus all \
-  -it \
-  -p 2200:22 \
-  -e DISPLAY=$DISPLAY \
-  -v /tmp/.X11-unix:/tmp/.X11-unix \
-  -v $HOME/.Xauthority:/root/.Xauthority \
-  -v $(pwd):/workspace \
-  fusion-dev \
-  /bin/bash
+git clone https://github.com/<org>/AI-Based-Data-Fusion.git
+cd AI-Based-Data-Fusion
 ```
 
-Once the container starts, a terminal inside `/workspace` is ready to use. The workspace auto-builds via `colcon build` on every container start.
+### 2. Open in VS Code
+```bash
+code .
+```
+
+### 3. Start the Dev Container
+When you open the folder, VS Code will automatically detect the `.devcontainer` configuration.
+- A popup will appear in the bottom right saying *"Folder contains a Dev Container configuration file"*. Click **Reopen in Container**.
+- **Alternative:** Click the green `><` icon in the absolute bottom-left corner of VS Code and select **"Dev Containers: Reopen in Container"**.
+
+> ⏳ **Note:** The very first time you do this, Docker will download the official ROS 2 image and build the environment. This takes roughly **5–10 minutes** depending on your internet connection. After this initial setup, opening the project will be nearly instant!
+
+---
+
+## 💻 How the Environment Works
+
+Once the container finishes building and connects, you are effectively working inside an isolated Ubuntu Linux machine with ROS 2 Humble pre-installed.
+
+- **Live Code Syncing:** The files on your computer are "bind-mounted" into the container. Any code you write, save, or change in VS Code on your Mac/Windows machine is instantly available inside the container.
+- **Integrated Terminal:** Open a new terminal in VS Code (`Ctrl + ~`). You will see you are operating as the `root` user inside `/workspace`. This is your ROS 2 environment!
+- **Auto-Building:** Our configuration automatically builds the ROS 2 workspace (`colcon build`) every time the container starts, so your messages and nodes are always ready to go.
 
 ---
 
