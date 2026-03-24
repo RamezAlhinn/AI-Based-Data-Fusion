@@ -1,4 +1,7 @@
-FROM nvidia/cuda@sha256:dc24c05b29f220b7215a0443ce79cdccf6a67208ee2a478f7cdd79bebca9bb39
+# Multi-arch base image: works on Apple Silicon (arm64) and WSL2/x86 (amd64).
+# The official ROS image already includes ROS 2 Humble, Ubuntu 22.04, and the
+# apt repository — no manual repo setup needed.
+FROM ros:humble-ros-base
 
 # ── System prerequisites ───────────────────────────────────────────────────────
 ARG DEBIAN_FRONTEND=noninteractive
@@ -14,13 +17,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
  && rm -rf /var/lib/apt/lists/*
 
 ENV LANG=en_US.UTF-8
-
-# ── Add ROS 2 Humble apt repository ───────────────────────────────────────────
-RUN curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key \
-        -o /usr/share/keyrings/ros-archive-keyring.gpg \
- && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] \
-     http://packages.ros.org/ros2/ubuntu $(lsb_release -cs) main" \
-     > /etc/apt/sources.list.d/ros2.list
 
 # ── Install ROS 2 Humble desktop + tooling ────────────────────────────────────
 RUN apt-get update && apt-get install -y --no-install-recommends \
