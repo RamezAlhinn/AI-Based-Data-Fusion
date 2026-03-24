@@ -38,53 +38,35 @@ When you open the folder, VS Code will automatically detect the `.devcontainer` 
 
 ---
 
-## 💻 How the Environment Works
-
-Once the container finishes building and connects, you are effectively working inside an isolated Ubuntu Linux machine with ROS 2 Humble pre-installed.
-
-- **Live Code Syncing:** The files on your computer are "bind-mounted" into the container. Any code you write, save, or change in VS Code on your Mac/Windows machine is instantly available inside the container.
-- **Integrated Terminal:** Open a new terminal in VS Code (`Ctrl + ~`). You will see you are operating as the `root` user inside `/workspace`. This is your ROS 2 environment!
-- **Auto-Building:** Our configuration automatically builds the ROS 2 workspace (`colcon build`) every time the container starts, so your messages and nodes are always ready to go.
-
----
-
-## Repository Structure
+## 📂 Repository Structure
 
 ```
 AI-Based-Data-Fusion/
 ├── .devcontainer/          # Docker + VS Code Dev Container configuration
-├── .github/workflows/      # GitHub Actions CI (builds fusion_msgs on every PR)
 ├── ros2_ws/
-│   └── src/
-│       └── fusion_msgs/    # Custom ROS 2 message definitions (FusedObject, FusedObjectArray)
-├── config/
-│   ├── sensor_params.yaml  # Camera / LiDAR / radar hardware parameters
-│   └── fusion_params.yaml  # Fusion algorithm and tracker tuning knobs
-├── bags/                   # Placeholder for ROS 2 bag files (stored externally)
-├── .env.example            # Environment variable template — copy to .env
+│   └── src/                # Your ROS 2 packages will go here!
+├── .gitignore
 └── README.md
 ```
 
 ---
 
-## ROS 2 Workspace
+## 🤖 ROS 2 Workspace
 
-The `ros2_ws/` workspace currently contains the **`fusion_msgs`** package only, which defines the shared message types used across the pipeline.
+The `ros2_ws/` workspace is currently empty. This repository provides the clean infrastructure so you can start creating packages immediately without worrying about dependencies or environment setup.
 
-Detector and fusion nodes will be added to `ros2_ws/src/` once the pipeline algorithm is decided. The build system (`colcon`) and message interfaces are already in place so new packages can be dropped in without any infrastructure work.
+### Creating your first package
 
-### Building manually
+Open the VS Code terminal (`Ctrl + ~`) and run:
+```bash
+cd /workspace/ros2_ws/src
+ros2 pkg create --build-type ament_cmake my_first_package
+```
+
+### Building the workspace
 
 ```bash
 cd /workspace/ros2_ws
-source /opt/ros/humble/setup.bash
 colcon build --symlink-install
 source install/setup.bash
-```
-
-### Verifying the messages are available
-
-```bash
-ros2 interface show fusion_msgs/msg/FusedObject
-ros2 interface show fusion_msgs/msg/FusedObjectArray
 ```

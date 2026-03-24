@@ -1,9 +1,0 @@
-fusion:
-  sync_slop: 0.1          # seconds — tolerated time difference for message sync
-  min_confidence: 0.4     # minimum detection confidence to publish
-  device: cpu             # 'cpu' or 'cuda' — inference device
-
-tracking:
-  max_age: 5              # frames a track survives without a match
-  min_hits: 3             # frames required before a track is confirmed
-  iou_threshold: 0.3      # IoU threshold for the Hungarian assignment step
