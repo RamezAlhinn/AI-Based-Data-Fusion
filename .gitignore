@@ -4,8 +4,8 @@ ros2_ws/install/
 ros2_ws/log/
 
 # Bag files
-bags/*.db3
-bags/*.mcap
+*.db3
+*.mcap
 bags/*.yaml
 
 # Python
