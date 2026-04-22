@@ -5,9 +5,11 @@ STEPS TO FOLLOW
 git clone https://github.com/jfzhang95/pytorch-deeplab-xception.git
 cd pytorch-deeplab-xception
 
-2- Open the folder with VC.
+2- Download Pre-trained model resnet.
 
-3- Add segmentation.py
+3- Open the folder with VC.
+
+4- Add segmentation.py
 
 Then segmentation.py should be in the same level as modeling 
 
