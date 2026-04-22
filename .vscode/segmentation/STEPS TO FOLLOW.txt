@@ -1,0 +1,19 @@
+STEPS TO FOLLOW 
+
+1- Clone the repository 
+
+git clone https://github.com/jfzhang95/pytorch-deeplab-xception.git
+cd pytorch-deeplab-xception
+
+2- Open the folder with VC.
+
+3- Add segmentation.py
+
+Then segmentation.py should be in the same level as modeling 
+
+pytorch-deeplab-xception/
+│
+├── modeling/
+│   └── deeplab.py   ← AQUÍ está la clase DeepLab
+├── dataloaders/
+├── segmentation.py
