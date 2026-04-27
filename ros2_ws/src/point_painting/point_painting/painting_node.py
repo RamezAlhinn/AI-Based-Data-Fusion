@@ -1,9 +1,11 @@
+import sys
 import numpy as np
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Image, PointCloud2
 from std_msgs.msg import String
 from cv_bridge import CvBridge
+from PIL import Image as PilImage
 import message_filters
 from sensor_msgs_py import point_cloud2 as pc2
 
@@ -15,7 +17,9 @@ class PaintingNode(Node):
         super().__init__('painting_node')
         self._bridge = CvBridge()
         self._frame_count = 0
+        self._seg_model = None
 
+        # --- Calibration ---
         self.declare_parameter('calib_file', '')
         calib_file = self.get_parameter('calib_file').get_parameter_value().string_value
         if calib_file:
@@ -27,6 +31,32 @@ class PaintingNode(Node):
                 'Pass: --ros-args -p calib_file:=/path/to/calib.txt'
             )
 
+        # --- Segmentation model ---
+        # deeplab_repo_path: folder that contains the 'modeling/' package
+        # (i.e. the root of the pytorch-deeplab-xception clone)
+        # checkpoint_path: path to deeplab-resnet.pth.tar
+        self.declare_parameter('deeplab_repo_path', '')
+        self.declare_parameter('checkpoint_path', '')
+        deeplab_repo = self.get_parameter('deeplab_repo_path').get_parameter_value().string_value
+        checkpoint = self.get_parameter('checkpoint_path').get_parameter_value().string_value
+
+        if deeplab_repo and checkpoint:
+            if deeplab_repo not in sys.path:
+                sys.path.insert(0, deeplab_repo)
+            try:
+                from point_painting.segmentation.deeplab_segmentation import load_model
+                self._seg_model = load_model(checkpoint)
+                self.get_logger().info(f'Segmentation model loaded from: {checkpoint}')
+            except Exception as e:
+                self.get_logger().error(f'Failed to load segmentation model: {e}')
+        else:
+            self.get_logger().warn(
+                'No segmentation model loaded — node will use raw image channel as label map. '
+                'Pass: --ros-args -p deeplab_repo_path:=/path/to/pytorch-deeplab-xception '
+                '-p checkpoint_path:=/path/to/deeplab-resnet.pth.tar'
+            )
+
+        # --- Publishers / Subscribers ---
         self._debug_pub = self.create_publisher(String, '/painting/debug', 10)
 
         img_sub = message_filters.Subscriber(
@@ -41,11 +71,16 @@ class PaintingNode(Node):
         self.get_logger().info('PaintingNode started, waiting for synced messages...')
 
     def _callback(self, img_msg: Image, cloud_msg: PointCloud2):
-        seg_image = self._bridge.imgmsg_to_cv2(img_msg, desired_encoding='passthrough')
+        cv_image = self._bridge.imgmsg_to_cv2(img_msg, desired_encoding='passthrough')
 
-        # Treat multi-channel image as a 2-D segmentation label map using first channel.
-        if seg_image.ndim == 3:
-            seg_image = seg_image[:, :, 0]
+        if self._seg_model is not None:
+            # Run DeepLab: BGR numpy → PIL RGB → (H, W) class-index array
+            from point_painting.segmentation.deeplab_segmentation import segment_image
+            pil_image = PilImage.fromarray(cv_image[..., ::-1])
+            seg_image = segment_image(self._seg_model, pil_image)
+        else:
+            # Degraded mode: treat first channel of raw image as label map
+            seg_image = cv_image[:, :, 0] if cv_image.ndim == 3 else cv_image
 
         points = list(pc2.read_points(cloud_msg, field_names=('x', 'y', 'z'), skip_nans=True))
         if len(points) == 0:

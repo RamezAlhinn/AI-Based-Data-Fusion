@@ -299,18 +299,23 @@ Decision: PointPainting chosen for laptop-class, CPU-only execution.
 │  1. ApproximateTimeSynchronizer (slop=0.1s)                    │
 │     → waits for image + cloud within 100ms of each other      │
 │                                                                │
-│  2. CvBridge → numpy (H×W) seg label map                      │
+│  2. CvBridge → raw BGR image (H×W×3)                          │
+│     IF model loaded:                                           │
+│       segment_image(model, image) [BelenNuñez]                │
+│       → seg_image (H×W) class-index array                     │
+│     ELSE (degraded):                                           │
+│       seg_image = raw image channel 0                          │
+│                                                                │
 │     read_points → numpy (N×3) float32 xyz                     │
 │                                                                │
 │  3. paint_points(xyz, seg_image)  ← painting_logic.py         │
-│     → uses KittiLidarToImageProjector                         │
-│       ← perception_framework package                          │
+│     → uses KittiLidarToImageProjector  [arpitashil676]        │
 │                                                                │
 │  4. Publish /painting/debug  (std_msgs/String)                 │
 │     "frame=42 painted=8500 skipped=1200"                      │
 └────────────────────────────────────────────────────────────────┘
              │
-             │  [Planned — not yet implemented]
+             │  [Not yet implemented]
              ▼
 ┌────────────────────────────────────────────────────────────────┐
 │                    DOWNSTREAM PIPELINE                         │
@@ -385,8 +390,9 @@ rclpy.init()
      │
      ▼
 PaintingNode.__init__()
-     ├── Read calib_file ROS2 parameter
-     ├── init_projector(calib_file)  ← loads calibration matrices
+     ├── Read calib_file → init_projector()       ← loads calibration matrices
+     ├── Read deeplab_repo_path + checkpoint_path
+     │     └── load_model()                       ← loads DeepLab weights once
      ├── Create publisher (/painting/debug)
      ├── Create message_filter subscribers
      ├── Register ApproximateTimeSynchronizer
@@ -396,7 +402,7 @@ PaintingNode.__init__()
 rclpy.spin(node)   ← blocks here, event loop running
      │
      │  on every synced (image, cloud) pair:
-     │    _callback() → decode → paint_points() → publish
+     │    _callback() → decode image → segment_image() → paint_points() → publish
      │
      │  on Ctrl+C:
      │    break out of spin
@@ -561,49 +567,71 @@ return painted, skipped, class_ids.tolist()
 **Author:** Ramez Alhinn  
 **Purpose:** All ROS I/O. Subscribes, synchronizes, decodes messages, calls `paint_points`, publishes results.
 
+**Three ROS 2 parameters — all optional, all safe to omit:**
+
+| Parameter | Purpose | Effect if missing |
+|---|---|---|
+| `calib_file` | Path to `calib.txt` | Projection skipped — painted=0 |
+| `deeplab_repo_path` | Root of `pytorch-deeplab-xception` clone | Segmentation disabled — degraded mode |
+| `checkpoint_path` | Path to `deeplab-resnet.pth.tar` | Segmentation disabled — degraded mode |
+
 **Startup sequence:**
 
 ```python
-self.declare_parameter('calib_file', '')
-calib_file = self.get_parameter('calib_file').get_parameter_value().string_value
-if calib_file:
-    init_projector(calib_file)        # loads KITTI matrices → projector ready
-else:
-    self.get_logger().warn(...)       # safe degraded mode
+# Calibration
+init_projector(calib_file)               # loads KITTI matrices from calib.txt
+
+# Segmentation model — repo path added to sys.path so 'modeling.deeplab' resolves
+sys.path.insert(0, deeplab_repo_path)
+from point_painting.segmentation.deeplab_segmentation import load_model
+self._seg_model = load_model(checkpoint_path)   # loads weights once, sets eval mode
 ```
 
 **Per-frame callback:**
 
 ```python
 def _callback(self, img_msg, cloud_msg):
-    # 1. Image: ROS Image → numpy (H×W)
-    seg_image = self._bridge.imgmsg_to_cv2(img_msg, 'passthrough')
-    if seg_image.ndim == 3:
-        seg_image = seg_image[:, :, 0]   # collapse segmentation channels to label map
+    # 1. Decode raw camera image
+    cv_image = self._bridge.imgmsg_to_cv2(img_msg, 'passthrough')
 
-    # 2. Point cloud: PointCloud2 → numpy (N×3)
-    points = list(pc2.read_points(cloud_msg, field_names=('x','y','z'), skip_nans=True))
-    xyz = np.array([(p[0], p[1], p[2]) for p in points], dtype=np.float32)
+    # 2. Segmentation — real labels or degraded fallback
+    if self._seg_model is not None:
+        pil_image = PilImage.fromarray(cv_image[..., ::-1])   # BGR → RGB
+        seg_image = segment_image(self._seg_model, pil_image) # (H,W) class indices 0–20
+    else:
+        seg_image = cv_image[:, :, 0]   # raw channel — projection works, labels meaningless
 
-    # 3. Paint
+    # 3. Point cloud → numpy (N×3)
+    xyz = np.array([...], dtype=np.float32)
+
+    # 4. Paint (calls KittiLidarToImageProjector internally)
     painted, skipped, _ = paint_points(xyz, seg_image)
 
-    # 4. Publish debug stats
-    self._debug_pub.publish(String(data=f'frame={self._frame_count} painted={painted} skipped={skipped}'))
+    # 5. Publish
+    self._debug_pub.publish(...)
 ```
 
-**Run the node:**
+**Run — Mode A (projection only, no model needed):**
 ```bash
-ros2 run point_painting painting_node --ros-args -p calib_file:=/path/to/calib.txt
+ros2 run point_painting painting_node \
+  --ros-args -p calib_file:=/workspace/calib.txt
+```
+
+**Run — Mode B (full pipeline with real segmentation):**
+```bash
+ros2 run point_painting painting_node --ros-args \
+  -p calib_file:=/workspace/calib.txt \
+  -p deeplab_repo_path:=/path/to/pytorch-deeplab-xception \
+  -p checkpoint_path:=/path/to/deeplab-resnet.pth.tar
 ```
 
 ---
 
-### 6.5 `segmentation/deeplab_segmentation.py` — Offline Segmentation
+### 6.5 `segmentation/deeplab_segmentation.py` — Segmentation Module
 
 **File:** [deeplab_segmentation.py](../ros2_ws/src/point_painting/point_painting/segmentation/deeplab_segmentation.py)  
 **Author:** BelenNuñez  
-**Purpose:** Runs DeepLab v3+ (ResNet backbone) on a static image and produces a class label map. Currently an offline tool — not yet a ROS 2 node.
+**Purpose:** Runs DeepLab v3+ (ResNet backbone) on a camera image and produces a per-pixel class label map. Called live from `painting_node.py` on every synced frame when a model checkpoint is provided.
 
 **Three importable functions:**
 
@@ -952,86 +980,49 @@ Once the painted cloud publisher is added:
 ```
 DONE ✅
 ├── Package skeleton (setup.py, package.xml, __init__.py)
-├── PaintingNode with ROS 2 lifecycle and calib_file parameter
+├── PaintingNode with ROS 2 lifecycle and three parameters:
+│     ├── calib_file        — path to calib.txt
+│     ├── deeplab_repo_path — path to pytorch-deeplab-xception clone
+│     └── checkpoint_path   — path to deeplab-resnet.pth.tar
 ├── ApproximateTimeSynchronizer (image + LiDAR sync, slop=0.1s)
-├── CvBridge image decoding
-├── PointCloud2 field extraction (x, y, z)
+├── DeepLab segmentation wired into live callback
+│     ├── load_model() called once at startup
+│     └── segment_image() called per frame → (H,W) class indices
+├── Graceful degraded mode — runs without model or calib file
 ├── KittiLidarToImageProjector (real KITTI calibration math)
 │     ├── load_kitti_calibration() — parses calib.txt
 │     ├── lidar_to_camera()        — R0_rect · Tr_velo_to_cam chain
 │     └── project_lidar_to_image() — cv2.projectPoints + bounds filter
 ├── paint_points() — vectorised, wired to projector
 ├── Debug publisher (/painting/debug)
-├── DeepLab v3+ offline segmentation module
-│     ├── load_model()      — loads checkpoint, sets eval mode
-│     ├── segment_image()   — returns (H,W) class label array
-│     └── decode_segmap()   — converts to RGB for visualisation
+├── calib.txt derived from /tf_static inside the bag
 ├── Rosbag extractor — saves frames + LiDAR scan to disk
 ├── Standalone unit tests (3 passing)
 └── Dev Container with all dependencies
 
-NEXT STEP ⬇️  (wiring segmentation into the live pipeline)
-└── DeepLab currently offline only — not yet a ROS 2 subscriber node
-    The node needs to subscribe to /blackfly_s/cam0/image_rectified,
-    run segment_image() per frame, and publish /segmentation/label_map
-
 TODO 🔲 (priority order)
-├── 1. Live segmentation node
-│       — wrap deeplab_segmentation.py as a ROS 2 publisher
-│       — PaintingNode subscribes to /segmentation/label_map
-│         instead of raw camera image
-│
-├── 2. Painted PointCloud2 publisher
+├── 1. Painted PointCloud2 publisher
 │       — package class_ids back into sensor_msgs/PointCloud2
 │       — publish on /painted/points
 │       — this is the input PointPillars needs
 │
-├── 3. PointPillars 3D detector
+├── 2. PointPillars 3D detector
 │       — pre-trained models available for KITTI
 │       — input: painted cloud; output: 3D bounding boxes
 │
-├── 4. AB3DMOT tracker
+├── 3. AB3DMOT tracker
 │       — Kalman Filter + Hungarian Algorithm across frames
 │       — input: per-frame detections; output: tracked objects with IDs
 │
-├── 5. RViz2 MarkerArray publisher
+├── 4. RViz2 MarkerArray publisher
 │       — CUBE markers for bounding boxes
 │       — TEXT_VIEW_FACING markers for track IDs
 │       — lifetime=0.15s so stale markers disappear
 │
-└── 6. Performance profiling
-        — measure per-frame latency of each stage
-        — segmentation is the likely bottleneck on CPU
-```
-
-### 10.2 The Segmentation Gap — How to Close It
-
-The most pressing integration gap is that `deeplab_segmentation.py` is offline only. The `painting_node` currently expects the image topic to already be a segmentation map — but in a real run, it will receive a raw RGB image.
-
-There are two ways to close this:
-
-**Option A — Separate segmentation node (cleaner):**
-```
-/blackfly_s/cam0/image_rectified
-        │
-        ▼
-SegmentationNode  (new node, wraps deeplab_segmentation.py)
-        │  runs segment_image() per frame
-        ▼
-/segmentation/label_map  (sensor_msgs/Image, mono8)
-        │
-        ▼
-PaintingNode  (subscribes to label_map instead of raw image)
-```
-
-**Option B — In-node inference (simpler but coupled):**
-```
-PaintingNode._callback()
-  1. seg_image = segment_image(model, pil_image)   ← runs DeepLab inline
-  2. paint_points(xyz, seg_image)
-```
-
-Option A is the right call architecturally because segmentation can then be swapped out (e.g., replace DeepLab with YOLOv8) without touching the painting logic.
+└── 5. Performance profiling
+        — DeepLab on CPU adds ~2–5s per frame
+        — measure per-stage latency, consider running segmentation
+          at a lower rate than LiDAR (e.g. every 5th frame)
 
 ---
 
@@ -1044,7 +1035,7 @@ Option A is the right call architecturally because segmentation can then be swap
 | `/blackfly_s/cam0/image_rectified` | In | `sensor_msgs/Image` | Active |
 | `/velodyne/points_raw` | In | `sensor_msgs/PointCloud2` | Active |
 | `/painting/debug` | Out | `std_msgs/String` | Active |
-| `/segmentation/label_map` | Out | `sensor_msgs/Image` | TODO |
+| `/segmentation/label_map` | — | internal (in-node, not published) | N/A |
 | `/painted/points` | Out | `sensor_msgs/PointCloud2` | TODO |
 | `/tracked_objects/markers` | Out | `visualization_msgs/MarkerArray` | TODO |
 
@@ -1054,8 +1045,14 @@ Option A is the right call architecturally because segmentation can then be swap
 # Build workspace
 cd /workspace/ros2_ws && colcon build --symlink-install && source install/setup.bash
 
-# Run painting node with calibration
-ros2 run point_painting painting_node --ros-args -p calib_file:=/path/to/calib.txt
+# Run node — projection only (no segmentation model)
+ros2 run point_painting painting_node --ros-args -p calib_file:=/workspace/calib.txt
+
+# Run node — full pipeline with DeepLab segmentation
+ros2 run point_painting painting_node --ros-args \
+  -p calib_file:=/workspace/calib.txt \
+  -p deeplab_repo_path:=/path/to/pytorch-deeplab-xception \
+  -p checkpoint_path:=/path/to/deeplab-resnet.pth.tar
 
 # Play bag data
 ros2 bag play /workspace/studentProject/ --loop

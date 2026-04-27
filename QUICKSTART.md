@@ -17,6 +17,8 @@ source install/setup.bash
 
 ## Step 2 — Run the painting node (Terminal 1)
 
+### Mode A — Projection only (no segmentation model needed)
+
 ```bash
 source /workspace/ros2_ws/install/setup.bash
 
@@ -27,8 +29,36 @@ ros2 run point_painting painting_node \
 Expected output:
 ```
 [INFO] Loaded calibration from: /workspace/calib.txt
+[WARN] No segmentation model loaded — node will use raw image channel as label map.
 [INFO] PaintingNode started, waiting for synced messages...
 ```
+
+`painted` counts are real — each point genuinely projects onto the image.  
+`class_ids` values are raw pixel intensities (not semantic labels) until the model is loaded.
+
+### Mode B — Full pipeline with DeepLab segmentation
+
+Requires the `pytorch-deeplab-xception` repo cloned and the checkpoint downloaded  
+(see Belen's setup steps in `STEPS TO FOLLOW.txt`).
+
+```bash
+source /workspace/ros2_ws/install/setup.bash
+
+ros2 run point_painting painting_node --ros-args \
+  -p calib_file:=/workspace/calib.txt \
+  -p deeplab_repo_path:=/path/to/pytorch-deeplab-xception \
+  -p checkpoint_path:=/path/to/deeplab-resnet.pth.tar
+```
+
+Expected output:
+```
+[INFO] Loaded calibration from: /workspace/calib.txt
+[INFO] Segmentation model loaded from: /path/to/deeplab-resnet.pth.tar
+[INFO] PaintingNode started, waiting for synced messages...
+```
+
+`class_ids` are now real semantic labels (0=background, 7=car, 15=person, ...).  
+Note: DeepLab on CPU adds ~2–5 seconds per frame — the node processes every frame it receives.
 
 ---
 
