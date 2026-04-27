@@ -7,7 +7,7 @@ from cv_bridge import CvBridge
 import message_filters
 from sensor_msgs_py import point_cloud2 as pc2
 
-from point_painting.painting_logic import paint_points
+from point_painting.painting_logic import init_projector, paint_points
 
 
 class PaintingNode(Node):
@@ -15,6 +15,17 @@ class PaintingNode(Node):
         super().__init__('painting_node')
         self._bridge = CvBridge()
         self._frame_count = 0
+
+        self.declare_parameter('calib_file', '')
+        calib_file = self.get_parameter('calib_file').get_parameter_value().string_value
+        if calib_file:
+            init_projector(calib_file)
+            self.get_logger().info(f'Loaded calibration from: {calib_file}')
+        else:
+            self.get_logger().warn(
+                'No calib_file parameter set — projection will skip all points. '
+                'Pass: --ros-args -p calib_file:=/path/to/calib.txt'
+            )
 
         self._debug_pub = self.create_publisher(String, '/painting/debug', 10)
 
