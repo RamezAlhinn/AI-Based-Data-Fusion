@@ -10,7 +10,7 @@ import numpy as np
 # Allow importing the package without installing it.
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from point_painting.painting_logic import project_point_to_pixel, paint_points
+from point_painting.painting_logic import paint_points
 
 
 def make_fake_points(n=10):
@@ -21,53 +21,53 @@ def make_fake_points(n=10):
 
 
 def make_fake_seg_image(height=200, width=200, fill_class=7):
-    """Return a 2-D segmentation label image filled with fill_class.
-
-    Must be at least 101x101 so the stub projection (100,100) is in-bounds.
-    """
     return np.full((height, width), fill_class, dtype=np.uint8)
 
 
-def test_all_points_get_class_id():
+def test_no_projector_skips_all_points():
+    """Without a calibration file, paint_points should skip every point."""
     points = make_fake_points(10)
-    seg = make_fake_seg_image(fill_class=7)
+    seg = make_fake_seg_image()
 
     painted, skipped, class_ids = paint_points(points, seg)
 
-    assert painted == 10, f"Expected 10 painted, got {painted}"
-    assert skipped == 0, f"Expected 0 skipped, got {skipped}"
-    assert len(class_ids) == 10, f"Expected 10 class_ids, got {len(class_ids)}"
+    assert painted == 0, f"Expected 0 painted (no projector), got {painted}"
+    assert skipped == 10, f"Expected 10 skipped, got {skipped}"
+    assert all(c == -1 for c in class_ids), "All class_ids should be -1 without projector"
 
-    for i, cid in enumerate(class_ids):
-        assert cid == 7, f"Point {i}: expected class_id=7, got {cid}"
-
-    print(f"  painted={painted}, skipped={skipped}")
-    print(f"  class_ids={class_ids}")
+    print(f"  painted={painted}, skipped={skipped} (no projector — expected)")
 
 
-def test_stub_projection_returns_valid_pixel():
-    u, v = project_point_to_pixel(1.0, 2.0, 5.0)
-    assert isinstance(u, int) and isinstance(v, int), "pixel coords must be ints"
-    print(f"  project_point_to_pixel(1.0, 2.0, 5.0) -> ({u}, {v})")
+def test_empty_point_cloud():
+    """Empty point cloud should return immediately with zero counts."""
+    points = np.zeros((0, 3), dtype=np.float32)
+    seg = make_fake_seg_image()
+
+    painted, skipped, class_ids = paint_points(points, seg)
+
+    assert painted == 0
+    assert skipped == 0
+    assert class_ids == []
+
+    print(f"  painted={painted}, skipped={skipped}, class_ids={class_ids}")
 
 
-def test_out_of_bounds_points_are_skipped():
-    """Force out-of-bounds by using a tiny 50x50 image; stub returns (100,100)."""
-    points = make_fake_points(5)
-    tiny_seg = np.full((50, 50), 3, dtype=np.uint8)
-    painted, skipped, class_ids = paint_points(points, tiny_seg)
+def test_class_ids_length_matches_input():
+    """class_ids list must always have exactly N entries (one per input point)."""
+    points = make_fake_points(15)
+    seg = make_fake_seg_image()
 
-    assert skipped == 5, f"Expected 5 skipped (out-of-bounds), got {skipped}"
-    assert painted == 0, f"Expected 0 painted, got {painted}"
-    assert all(c == -1 for c in class_ids), "Out-of-bounds points should have class_id=-1"
-    print(f"  painted={painted}, skipped={skipped} (all out of 50x50 bounds as expected)")
+    _, _, class_ids = paint_points(points, seg)
+
+    assert len(class_ids) == 15, f"Expected 15 class_ids, got {len(class_ids)}"
+    print(f"  len(class_ids)={len(class_ids)} (matches input)")
 
 
 if __name__ == '__main__':
     tests = [
-        test_stub_projection_returns_valid_pixel,
-        test_all_points_get_class_id,
-        test_out_of_bounds_points_are_skipped,
+        test_no_projector_skips_all_points,
+        test_empty_point_cloud,
+        test_class_ids_length_matches_input,
     ]
 
     failures = []
