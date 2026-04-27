@@ -3,7 +3,13 @@
     "allow": [
       "Bash(git push:*)",
       "Bash(git add:*)",
-      "Bash(git commit:*)"
+      "Bash(git commit:*)",
+      "Bash(mkdir -p /Users/User/git/AI-Based-Data-Fusion/ros2_ws/src/point_painting/point_painting)",
+      "Bash(mkdir -p /Users/User/git/AI-Based-Data-Fusion/ros2_ws/src/point_painting/test)",
+      "Bash(mkdir -p /Users/User/git/AI-Based-Data-Fusion/ros2_ws/src/point_painting/resource)",
+      "Bash(python3 ros2_ws/src/point_painting/test/test_painting_node.py)",
+      "Bash(python3 -c \"import sys; print\\(sys.executable\\)\")",
+      "Bash(pip3 install *)"
     ]
   }
 }
