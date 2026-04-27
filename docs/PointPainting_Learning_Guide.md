@@ -787,6 +787,61 @@ Tr_velo_to_cam: 7.533745e-03 -9.999714e-01 -6.166020e-04 -4.069766e-03 ...
 
 `KittiLidarToImageProjector.load_kitti_calibration()` reads this file and reshapes each row into its matrix form.
 
+### 7.5 How `calib.txt` Was Derived for This Project
+
+No separate calibration file was provided with the bag. It was reconstructed from two sources already embedded in the data.
+
+**Source 1 — Extrinsics from `/tf_static` (inside the bag)**
+
+The bag contains a `/tf_static` topic with three static transforms. One of them is:
+
+```
+parent frame : velodyne
+child frame  : cam0
+translation  : x=0.692 m,  y=0.000 m,  z=-0.180 m
+rotation     : x=-0.53433  y=0.54336  z=-0.46407  w=0.45154  (quaternion)
+```
+
+The translation says the camera sits **0.692 m in front** of and **0.180 m below** the LiDAR — a realistic roof-bar mounting.
+
+The quaternion was converted to a 3×3 rotation matrix using the standard formula:
+
+```
+R[0][0] = 1 - 2(ry²+rz²)    R[0][1] = 2(rx·ry - rz·rw)   R[0][2] = 2(rx·rz + ry·rw)
+R[1][0] = 2(rx·ry + rz·rw)  R[1][1] = 1 - 2(rx²+rz²)     R[1][2] = 2(ry·rz - rx·rw)
+R[2][0] = 2(rx·rz - ry·rw)  R[2][1] = 2(ry·rz + rx·rw)   R[2][2] = 1 - 2(rx²+ry²)
+```
+
+**Convention correction — the critical step:** ROS tf stores the transform as "how to express the child frame in the parent frame" — geometrically, this is the *passive* (frame-orientation) rotation, which is the **transpose** of the *active* (point-rotating) matrix that KITTI expects. Using the quaternion directly gave a rotation that mapped LiDAR-forward into camera-sideways, putting all points behind the camera. The fix is to transpose R before building `Tr_velo_to_cam`.
+
+The translation also needs to be re-expressed in the camera frame (not the LiDAR frame):
+
+```
+t_camera_frame = -R.T @ t_velodyne_frame
+```
+
+Validation: a LiDAR point at [10, 0, 0] (10 m straight ahead) projects to pixel (910, 174) on the 1920×1200 image — near the horizontal center and in the upper half, consistent with the camera being mounted below the LiDAR and angled slightly upward.
+
+**Source 2 — Intrinsics from sensor datasheet (Blackfly S BFS-U3-51S5C)**
+
+The bag has no `/camera_info` topic, so the camera intrinsics were estimated from hardware specs:
+
+| Parameter | Value | Source |
+|-----------|-------|--------|
+| Sensor | Sony IMX250, 2/3 inch | Blackfly S datasheet |
+| Pixel pitch | 3.45 µm | Datasheet |
+| Image size | 1920 × 1200 px | Measured from bag messages |
+| Lens | 8 mm C-mount (estimated) | Typical for this platform |
+| `fx = fy` | 8.0 mm ÷ 0.00345 mm/px = **2318.8 px** | Calculated |
+| `cx` | 959.5 px | Centre of 1920-wide rectified image |
+| `cy` | 599.5 px | Centre of 1200-tall rectified image |
+
+This gives a horizontal field of view of **45°** and vertical of **29°**, which is consistent with an 8 mm lens on this sensor.
+
+**`R0_rect`** is set to identity (3×3) because this is a monocular camera — there is no stereo pair to rectify against.
+
+**Important:** `fx` is the most uncertain value. If projected LiDAR points appear consistently shifted left/right on the image, the lens may be 6 mm (fx≈1739, HFOV≈58°) or 12 mm (fx≈3478, HFOV≈31°). You can tune it by overlaying the projected points on a saved camera frame and checking that road-surface points land at the bottom of the image and distant objects at the expected depth.
+
 ---
 
 ## 8. Dev Container — Your Execution Environment
