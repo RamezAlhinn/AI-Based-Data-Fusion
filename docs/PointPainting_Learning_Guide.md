@@ -2,8 +2,16 @@
 
 **Project:** AI-Based Data Fusion — Camera + LiDAR Perception  
 **Platform:** ROS 2 Humble · Docker Dev Container · Velodyne LiDAR · Blackfly S Camera  
-**Author:** Ramez Alhinn  
 **Updated:** April 2026
+
+### Team
+
+| Name | Role / Contribution |
+|------|---------------------|
+| **Ramez Alhinn** |  ROS 2 node architecture, painting logic, system integration, tests |
+| **arpitashil676** | LiDAR-to-image projection framework (`perception_framework` package) |
+| **BelenNuñez** | 2D semantic segmentation (DeepLab v3+ module) |
+| **carlosaterans-cmd** | Rosbag data extraction utility |
 
 ---
 
@@ -171,12 +179,12 @@ PointPainting is a **sequential fusion** method — camera runs first, then its 
 │                    POINTPAINTING PIPELINE                      │
 ├────────────────────────────────────────────────────────────────┤
 │                                                                │
-│  STEP 1: 2D Semantic Segmentation                              │
+│  STEP 1: 2D Semantic Segmentation          [BelenNuñez]        │
 │  ┌──────────────────────────────────────────────────┐         │
 │  │  Camera Image (H × W × 3)                        │         │
 │  │         │                                        │         │
 │  │         ▼                                        │         │
-│  │  2D CNN (DeepLab v3+ in your project)            │         │
+│  │  DeepLab v3+  (deeplab_segmentation.py)          │         │
 │  │         │                                        │         │
 │  │         ▼                                        │         │
 │  │  Segmentation Map (H × W)                        │         │
@@ -187,9 +195,12 @@ PointPainting is a **sequential fusion** method — camera runs first, then its 
 │                           │                                    │
 │                           │ class label per pixel              │
 │                           ▼                                    │
-│  STEP 2: Project LiDAR Points onto Image                       │
+│  STEP 2: Project LiDAR Points onto Image  [arpitashil676]      │
 │  ┌──────────────────────────────────────────────────┐         │
 │  │  LiDAR Point Cloud (N × 3) [x, y, z]            │         │
+│  │         │                                        │         │
+│  │         │  KittiLidarToImageProjector            │         │
+│  │         │  (lidar_to_image_projection.py)        │         │
 │  │         │                                        │         │
 │  │         │  Transform to camera frame:            │         │
 │  │         │  p_cam = R0_rect · Tr_velo_to_cam · p  │         │
@@ -203,8 +214,10 @@ PointPainting is a **sequential fusion** method — camera runs first, then its 
 │                           │                                    │
 │                           │ (u, v) for each valid point        │
 │                           ▼                                    │
-│  STEP 3: Paint Points with Semantic Labels                     │
+│  STEP 3: Paint Points with Semantic Labels  [Ramez Alhinn]     │
 │  ┌──────────────────────────────────────────────────┐         │
+│  │  paint_points()  in  painting_logic.py           │         │
+│  │                                                  │         │
 │  │  For each in-bounds point:                       │         │
 │  │    class_id = seg_map[v, u]                      │         │
 │  │  For out-of-bounds points:                       │         │
@@ -281,7 +294,7 @@ Decision: PointPainting chosen for laptop-class, CPU-only execution.
              │                               │
              ▼                               ▼
 ┌────────────────────────────────────────────────────────────────┐
-│              PAINTING NODE  (painting_node.py)                 │
+│         PAINTING NODE  (painting_node.py)  [Ramez Alhinn]      │
 │                                                                │
 │  1. ApproximateTimeSynchronizer (slop=0.1s)                    │
 │     → waits for image + cloud within 100ms of each other      │
@@ -492,6 +505,7 @@ valid projected point
 ### 6.3 `painting_logic.py` — Core Painting Algorithm
 
 **File:** [painting_logic.py](../ros2_ws/src/point_painting/point_painting/painting_logic.py)  
+**Author:** Ramez Alhinn  
 **Purpose:** Ties the projector and segmentation map together. No ROS — pure numpy.
 
 **Module state:**
@@ -544,6 +558,7 @@ return painted, skipped, class_ids.tolist()
 ### 6.4 `painting_node.py` — The ROS 2 Node
 
 **File:** [painting_node.py](../ros2_ws/src/point_painting/point_painting/painting_node.py)  
+**Author:** Ramez Alhinn  
 **Purpose:** All ROS I/O. Subscribes, synchronizes, decodes messages, calls `paint_points`, publishes results.
 
 **Startup sequence:**
@@ -632,6 +647,7 @@ python3 /path/to/deeplab_segmentation.py \
 
 **File:** [rosbag_extractor.py](../ros2_ws/src/point_painting/point_painting/rosbag_extractor.py)  
 **Author:** carlosaterans-cmd  
+
 **Purpose:** Reads a ROS 2 bag file and saves the first 10 camera frames as JPEGs and the first LiDAR scan as a `.npy` file. Used for offline experimentation — run segmentation or visualise data without playing a live bag.
 
 **How to use:**
@@ -668,6 +684,7 @@ output_data/
 ### 6.7 Tests — `test_painting_node.py`
 
 **File:** [test_painting_node.py](../ros2_ws/src/point_painting/test/test_painting_node.py)  
+**Author:** Ramez Alhinn  
 **Purpose:** Validates `paint_points()` in isolation — no ROS runtime needed.
 
 The tests are designed around the real behaviour of `painting_logic.py`: without a calibration file loaded, the projector is `None` and all points are skipped. This is the correct safe-degraded state.
