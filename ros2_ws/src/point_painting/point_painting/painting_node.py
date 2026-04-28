@@ -6,7 +6,6 @@ from sensor_msgs.msg import Image, PointCloud2
 from std_msgs.msg import String
 from cv_bridge import CvBridge
 from PIL import Image as PilImage
-import message_filters
 from sensor_msgs_py import point_cloud2 as pc2
 
 from point_painting.painting_logic import init_projector, paint_points
@@ -18,6 +17,8 @@ class PaintingNode(Node):
         self._bridge = CvBridge()
         self._frame_count = 0
         self._seg_model = None
+        self._latest_img = None
+        self._latest_cloud = None
 
         # --- Calibration ---
         self.declare_parameter('calib_file', '')
@@ -57,18 +58,23 @@ class PaintingNode(Node):
             )
 
         # --- Publishers / Subscribers ---
+        # The LiDAR and camera were recorded with different clocks so we use a
+        # latest-message cache instead of ApproximateTimeSynchronizer.
         self._debug_pub = self.create_publisher(String, '/painting/debug', 10)
-
-        img_sub = message_filters.Subscriber(
-            self, Image, '/blackfly_s/cam0/image_rectified')
-        lidar_sub = message_filters.Subscriber(
-            self, PointCloud2, '/velodyne/points_raw')
-
-        self._sync = message_filters.ApproximateTimeSynchronizer(
-            [img_sub, lidar_sub], queue_size=10, slop=0.1)
-        self._sync.registerCallback(self._callback)
+        self.create_subscription(Image, '/blackfly_s/cam0/image_rectified', self._img_cb, 10)
+        self.create_subscription(PointCloud2, '/velodyne/points_raw', self._cloud_cb, 10)
 
         self.get_logger().info('PaintingNode started, waiting for synced messages...')
+
+    def _img_cb(self, msg: Image):
+        self._latest_img = msg
+        if self._latest_cloud is not None:
+            self._callback(self._latest_img, self._latest_cloud)
+
+    def _cloud_cb(self, msg: PointCloud2):
+        self._latest_cloud = msg
+        if self._latest_img is not None:
+            self._callback(self._latest_img, self._latest_cloud)
 
     def _callback(self, img_msg: Image, cloud_msg: PointCloud2):
         cv_image = self._bridge.imgmsg_to_cv2(img_msg, desired_encoding='passthrough')

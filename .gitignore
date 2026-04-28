@@ -15,3 +15,8 @@ __pycache__/
 
 # Environment secrets
 .env
+
+# Model checkpoints (large binaries — store externally)
+*.pth
+*.pth.tar
+*.pt

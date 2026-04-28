@@ -44,7 +44,7 @@ RUN pip3 install --no-cache-dir \
     --index-url https://download.pytorch.org/whl/cpu
 
 RUN pip3 install --no-cache-dir \
-    numpy \
+    "numpy<2.0" \
     scipy \
     ultralytics \
     open3d \

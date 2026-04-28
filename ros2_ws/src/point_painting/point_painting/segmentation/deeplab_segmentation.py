@@ -5,7 +5,6 @@ import torch
 from modeling.deeplab import DeepLab
 from PIL import Image
 from torchvision import transforms
-import matplotlib.pyplot as plt
 
 PASCAL_COLORS = [
     [0, 0, 0], [128, 0, 0], [0, 128, 0], [128, 128, 0], [0, 0, 128],
@@ -65,6 +64,10 @@ if __name__ == '__main__':
     parser.add_argument('--image', required=True, help='Path to input image')
     args = parser.parse_args()
 
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+
     model = load_model(args.checkpoint)
     image = Image.open(args.image).convert('RGB')
     label_mask = segment_image(model, image)
@@ -79,4 +82,6 @@ if __name__ == '__main__':
     plt.imshow(segmentation_map)
     plt.title('Segmentation')
     plt.axis('off')
-    plt.show()
+    out = args.image.rsplit('.', 1)[0] + '_segmentation.png'
+    plt.savefig(out)
+    print(f'Saved: {out}')

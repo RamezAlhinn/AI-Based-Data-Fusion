@@ -14,7 +14,14 @@
       "Read(//tmp/**)",
       "Read(//private/tmp/**)",
       "Bash(python3 -c \"import cv2; print\\('cv2 ok'\\)\")",
-      "Bash(python3 -c \"import cv2; print\\('cv2:', cv2.__version__\\)\")"
+      "Bash(python3 -c \"import cv2; print\\('cv2:', cv2.__version__\\)\")",
+      "Bash(curl -sI \"https://github.com/jfzhang95/pytorch-deeplab-xception/releases\")",
+      "Bash(curl -s \"https://github.com/jfzhang95/pytorch-deeplab-xception/releases\")",
+      "Bash(curl -sL \"https://raw.githubusercontent.com/jfzhang95/pytorch-deeplab-xception/master/README.md\")",
+      "Bash(curl -sI \"https://huggingface.co/datasets/nicolafan/deeplab-xception-pascal-voc/resolve/main/deeplab-resnet.pth.tar\")",
+      "Bash(curl -sI \"https://huggingface.co/jonathandinu/face-parsing/resolve/main/model.safetensors\")",
+      "Bash(curl -s \"https://huggingface.co/api/models?search=deeplab-resnet&limit=5\")",
+      "Bash(python3 -c \"import sys,json; [print\\(m['modelId']\\) for m in json.load\\(sys.stdin\\)]\")"
     ]
   }
 }
