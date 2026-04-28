@@ -294,25 +294,43 @@ Decision: PointPainting chosen for laptop-class, CPU-only execution.
              │                               │
              ▼                               ▼
 ┌────────────────────────────────────────────────────────────────┐
-│         PAINTING NODE  (painting_node.py)  [Ramez Alhinn]      │
+│    PAINTING NODE  (painting_node.py)  [Ramez Alhinn]           │
 │                                                                │
-│  1. ApproximateTimeSynchronizer (slop=0.1s)                    │
-│     → waits for image + cloud within 100ms of each other      │
-│                                                                │
-│  2. CvBridge → raw BGR image (H×W×3)                          │
-│     IF model loaded:                                           │
-│       segment_image(model, image) [BelenNuñez]                │
-│       → seg_image (H×W) class-index array                     │
-│     ELSE (degraded):                                           │
-│       seg_image = raw image channel 0                          │
-│                                                                │
-│     read_points → numpy (N×3) float32 xyz                     │
-│                                                                │
-│  3. paint_points(xyz, seg_image)  ← painting_logic.py         │
-│     → uses KittiLidarToImageProjector  [arpitashil676]        │
-│                                                                │
-│  4. Publish /painting/debug  (std_msgs/String)                 │
-│     "frame=42 painted=8500 skipped=1200"                      │
+│  ┌─────────────────────────────────────────────────────────┐   │
+│  │  RAMEZ — ROS plumbing & orchestration                   │   │
+│  │                                                         │   │
+│  │  1. ApproximateTimeSynchronizer (slop=0.1s)             │   │
+│  │     waits for image + cloud within 100ms of each other  │   │
+│  │                                                         │   │
+│  │  2. CvBridge → raw BGR numpy image                      │   │
+│  │     read_points → (N×3) float32 xyz array               │   │
+│  └───────────────────────┬─────────────────────────────────┘   │
+│                          │                                     │
+│                          ▼                                     │
+│  ┌─────────────────────────────────────────────────────────┐   │
+│  │  BELEN — segment_image(model, image)                    │   │
+│  │  Camera frame → (H×W) grid of class indices             │   │
+│  │  0=background  7=car  15=person  ...                    │   │
+│  └───────────────────────┬─────────────────────────────────┘   │
+│                          │ seg_image (H×W)                     │
+│                          ▼                                     │
+│  ┌─────────────────────────────────────────────────────────┐   │
+│  │  ARPITA — project_lidar_to_image(xyz, image_shape)      │   │
+│  │  Each 3D point → pixel [u, v] via KITTI calib chain     │   │
+│  │  Drops points behind camera or outside frame            │   │
+│  └───────────────────────┬─────────────────────────────────┘   │
+│                          │ pixel coords per valid point        │
+│                          ▼                                     │
+│  ┌─────────────────────────────────────────────────────────┐   │
+│  │  RAMEZ — the painting step  (painting_logic.py)         │   │
+│  │                                                         │   │
+│  │  class_ids[i] = seg_image[v, u]                         │   │
+│  │                                                         │   │
+│  │  ← this is the fusion: a 3D LiDAR point gets its        │   │
+│  │    semantic class for the first time here               │   │
+│  └───────────────────────┬─────────────────────────────────┘   │
+│                          │                                     │
+│  5. Publish /painting/debug  "frame=42 painted=8500 skipped=1200"│
 └────────────────────────────────────────────────────────────────┘
              │
              │  [Not yet implemented]

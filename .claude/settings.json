@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//Users/User/git/AI-Based-Data-Fusion/ros2_ws/install/fusion_msgs/share/fusion_msgs/msg/**)",
+      "Bash(git log *)",
+      "Bash(git merge *)",
+      "Bash(git stash *)",
+      "Bash(git checkout *)",
+      "Bash(mkdir -p ros2_ws/src/point_painting/point_painting/segmentation)",
+      "Bash(cp .vscode/segmentation/segmentation.py ros2_ws/src/point_painting/point_painting/segmentation/deeplab_segmentation.py)",
+      "Bash(cp .vscode/segmentation/1_car.jpg ros2_ws/src/point_painting/point_painting/segmentation/1_car.jpg)",
+      "Bash(git rm *)",
+      "Bash(git mv *)",
+      "Read(//tmp/**)",
+      "Read(//private/tmp/**)",
+      "Bash(python3 -c \"import cv2; print\\('cv2 ok'\\)\")",
+      "Bash(python3 -c \"import cv2; print\\('cv2:', cv2.__version__\\)\")"
+    ]
+  }
+}

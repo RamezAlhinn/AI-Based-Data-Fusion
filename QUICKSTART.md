@@ -38,22 +38,22 @@ Expected output:
 
 ### Mode B — Full pipeline with DeepLab segmentation
 
-Requires the `pytorch-deeplab-xception` repo cloned and the checkpoint downloaded  
-(see Belen's setup steps in `STEPS TO FOLLOW.txt`).
+The `pytorch-deeplab-xception` repo is baked into the image at `/opt/deeplab` — no extra cloning needed.  
+You only need the checkpoint file. Download `deeplab-resnet.pth.tar` and place it in your project root on your Mac; it will appear at `/workspace/deeplab-resnet.pth.tar` inside the container.
 
 ```bash
 source /workspace/ros2_ws/install/setup.bash
 
 ros2 run point_painting painting_node --ros-args \
   -p calib_file:=/workspace/calib.txt \
-  -p deeplab_repo_path:=/path/to/pytorch-deeplab-xception \
-  -p checkpoint_path:=/path/to/deeplab-resnet.pth.tar
+  -p deeplab_repo_path:=/opt/deeplab \
+  -p checkpoint_path:=/workspace/deeplab-resnet.pth.tar
 ```
 
 Expected output:
 ```
 [INFO] Loaded calibration from: /workspace/calib.txt
-[INFO] Segmentation model loaded from: /path/to/deeplab-resnet.pth.tar
+[INFO] Segmentation model loaded from: /workspace/deeplab-resnet.pth.tar
 [INFO] PaintingNode started, waiting for synced messages...
 ```
 

@@ -47,7 +47,13 @@ RUN pip3 install --no-cache-dir \
     numpy \
     scipy \
     ultralytics \
-    open3d
+    open3d \
+    pillow \
+    matplotlib
+
+# ── DeepLab segmentation model ─────────────────────────────────────────────────
+RUN git clone https://github.com/jfzhang95/pytorch-deeplab-xception.git /opt/deeplab
+ENV DEEPLAB_REPO=/opt/deeplab
 
 # ── Environment & UX ───────────────────────────────────────────────────────────
 ENV ROS_DOMAIN_ID=42
