@@ -1,5 +1,6 @@
 import sys
 import struct
+import cv2
 import numpy as np
 import rclpy
 from rclpy.node import Node
@@ -69,6 +70,9 @@ class PaintingNode(Node):
         # latest-message cache instead of ApproximateTimeSynchronizer.
         self._debug_pub = self.create_publisher(String, '/painting/debug', 10)
         self._painted_pub = self.create_publisher(PointCloud2, '/painting/painted_cloud', 10)
+        # Segmentation overlay: original image with coloured class masks blended on top.
+        # View this in Foxglove Image panel to verify the model labels the right objects.
+        self._overlay_pub = self.create_publisher(Image, '/painting/segmentation_overlay', 10)
         self.create_subscription(Image, '/blackfly_s/cam0/image_rectified', self._img_cb, 10)
         self.create_subscription(PointCloud2, '/velodyne/points_raw', self._cloud_cb, 10)
 
@@ -102,6 +106,7 @@ class PaintingNode(Node):
         painted, skipped, class_ids = paint_points(xyz, seg_image)
 
         self._publish_painted_cloud(xyz, class_ids, cloud_msg.header)
+        self._publish_segmentation_overlay(cv_image, seg_image, img_msg.header)
 
         self._frame_count += 1
         if self._frame_count % 50 == 0:
@@ -111,6 +116,32 @@ class PaintingNode(Node):
         msg = String()
         msg.data = f'frame={self._frame_count} painted={painted} skipped={skipped}'
         self._debug_pub.publish(msg)
+
+    def _publish_segmentation_overlay(self, cv_image: np.ndarray, seg_image: np.ndarray, header):
+        """Blend coloured class masks onto the original image and publish for verification."""
+        # Work in BGR (cv_image from cv_bridge is BGR)
+        overlay = cv_image.copy() if cv_image.ndim == 3 else cv2.cvtColor(cv_image, cv2.COLOR_GRAY2BGR)
+        colour_mask = np.zeros_like(overlay)
+
+        for class_id, (r, g, b) in CLASS_COLORS.items():
+            if class_id == 0:
+                continue  # skip background
+            mask = seg_image == class_id
+            if not mask.any():
+                continue
+            # seg_image is at model output resolution — resize mask to match image
+            if seg_image.shape != overlay.shape[:2]:
+                import cv2 as _cv2
+                mask_u8 = mask.astype(np.uint8) * 255
+                mask_u8 = _cv2.resize(mask_u8, (overlay.shape[1], overlay.shape[0]),
+                                      interpolation=_cv2.INTER_NEAREST)
+                mask = mask_u8 > 0
+            colour_mask[mask] = (b, g, r)  # BGR order
+
+        blended = cv2.addWeighted(overlay, 0.6, colour_mask, 0.4, 0)
+        overlay_msg = self._bridge.cv2_to_imgmsg(blended, encoding='bgr8')
+        overlay_msg.header = header
+        self._overlay_pub.publish(overlay_msg)
 
     def _publish_painted_cloud(self, xyz: np.ndarray, class_ids: list, header):
         fields = [
