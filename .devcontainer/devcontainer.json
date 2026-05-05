@@ -34,6 +34,13 @@
       }
     }
   },
+  "forwardPorts": [8765],
+  "portsAttributes": {
+    "8765": {
+      "label": "Foxglove Bridge",
+      "onAutoForward": "silent"
+    }
+  },
   "postStartCommand": "cd /workspace/ros2_ws && colcon build --symlink-install 2>/dev/null || true",
   "remoteUser": "root"
 }

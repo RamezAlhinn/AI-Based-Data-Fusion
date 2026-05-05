@@ -3,6 +3,8 @@
 All commands run **inside the Dev Container** (`><` → Reopen in Container).  
 Open four terminal tabs in VS Code (`Ctrl+Shift+\`` to split).
 
+> **Visualisation:** RViz2 has no display inside the container. We use **Foxglove Studio** on your Mac instead, connected over a WebSocket bridge on port `8765`.
+
 ---
 
 ## Step 1 — Build (once per container start)
@@ -89,19 +91,30 @@ Roughly 60–70% painted is expected given the camera's ~45° horizontal field o
 
 ---
 
-## Step 5 — Visualise in RViz2 (Terminal 4)
+## Step 5 — Visualise in Foxglove Studio (Terminal 4)
+
+RViz2 has no display inside the container. Start the Foxglove WebSocket bridge instead:
 
 ```bash
-rviz2
+ros2 launch foxglove_bridge foxglove_bridge_launch.xml port:=8765
 ```
 
-Inside RViz2:
-1. Set **Fixed Frame** → `velodyne`
-2. Click **Add** → **By topic** → `/velodyne/points_raw` → **PointCloud2**
-   - Change **Color Transformer** to `Intensity`
-3. Click **Add** → **By topic** → `/blackfly_s/cam0/image_rectified` → **Image**
+Expected output:
+```
+[foxglove_bridge]: WebSocket server listening on ws://0.0.0.0:8765
+```
 
-You will see the spinning point cloud and the live camera feed side by side.
+Then on your **Mac**:
+1. Open [Foxglove Studio](https://app.foxglove.dev) (browser or desktop app)
+2. Click **Open connection** → **Foxglove WebSocket**
+3. Enter `ws://localhost:8765` and click **Open**
+
+Inside Foxglove:
+- Click **+** → **3D** panel → subscribe to `/velodyne/points_raw` to see the point cloud
+- Click **+** → **Image** panel → subscribe to `/blackfly_s/cam0/image_rectified` to see the camera feed
+- Click **+** → **Raw Messages** panel → subscribe to `/painting/debug` to watch painted/skipped counts
+
+Port `8765` is automatically forwarded by the devcontainer — no extra configuration needed.
 
 ---
 
