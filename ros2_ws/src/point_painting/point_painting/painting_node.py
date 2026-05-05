@@ -16,6 +16,7 @@ from point_painting.painting_logic import init_projector, paint_points
 CLASS_COLORS = {
     0:  (50,  50,  50),   # background — dark grey
     2:  (0,   0,   255),  # bicycle    — blue
+    3:  (0,   255, 0),    # car        — green
     4:  (255, 128, 0),    # motorcycle — orange
     6:  (255, 255, 0),    # bus        — yellow
     7:  (0,   255, 255),  # train      — cyan
