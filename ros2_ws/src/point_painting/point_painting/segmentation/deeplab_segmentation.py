@@ -1,94 +1,90 @@
-import argparse
-
 import numpy as np
-import torch
 from PIL import Image
-from torchvision import transforms
-from torchvision.models.segmentation import deeplabv3_resnet101, DeepLabV3_ResNet101_Weights
 
-# Cityscapes-compatible class palette (21 COCO classes that overlap with driving scenes)
-# Classes: 0=background, 2=car, 7=train, 14=bird, 15=cat, etc.
-# More useful for driving: person=15, car=7, bicycle=2, motorcycle=4, bus=6
-COCO_COLORS = [
-    [0, 0, 0], [128, 0, 0], [0, 128, 0], [128, 128, 0], [0, 0, 128],
-    [128, 0, 128], [0, 128, 128], [128, 128, 128], [64, 0, 0],
-    [192, 0, 0], [64, 128, 0], [192, 128, 0], [64, 0, 128],
-    [192, 0, 128], [64, 128, 128], [192, 128, 128], [0, 64, 0],
-    [128, 64, 0], [0, 192, 0], [128, 192, 0], [0, 64, 128]
-]
+# COCO class IDs relevant for driving scenes
+# YOLO uses the same COCO class IDs as DeepLabV3
+# 0=person, 1=bicycle, 2=car, 3=motorcycle, 5=bus, 7=truck
+# Note: YOLO COCO IDs differ from DeepLab — remapped below to our colour map IDs
+YOLO_TO_PAINTING_CLASS = {
+    0:  15,  # person     → painting class 15 (red)
+    1:  2,   # bicycle    → painting class 2  (blue)
+    2:  3,   # car        → painting class 3  (green)
+    3:  4,   # motorcycle → painting class 4  (orange)
+    5:  6,   # bus        → painting class 6  (yellow)
+    7:  3,   # truck      → painting class 3  (green, same as car)
+}
 
-# Relevant class IDs for PointPainting (COCO-trained DeepLabV3):
-# 0=background, 2=bicycle, 4=motorcycle, 6=bus, 7=train, 13=bench,
-# 15=person, 17=cat, 18=dog, 19=horse, 20=sheep
-DRIVING_CLASSES = {2: 'bicycle', 4: 'motorcycle', 6: 'bus', 7: 'train', 15: 'person'}
-
-_preprocess = transforms.Compose([
-    transforms.ToTensor(),
-    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-])
+_model = None
 
 
 def load_model(checkpoint_path: str = None):
     """
-    Load DeepLabV3-ResNet101 pretrained on COCO (includes person, bicycle, car, bus).
-    checkpoint_path is accepted for API compatibility but ignored — weights are
-    downloaded automatically from torchvision on first use (~330 MB, cached).
+    Load YOLOv11n-seg. Downloads automatically on first use (~6 MB, cached).
+    checkpoint_path is accepted for API compatibility but ignored.
     """
-    weights = DeepLabV3_ResNet101_Weights.DEFAULT
-    model = deeplabv3_resnet101(weights=weights)
-    model.eval()
-    if torch.cuda.is_available():
-        model = model.to('cuda')
-    return model
+    global _model
+    from ultralytics import YOLO
+    _model = YOLO('yolo11n-seg.pt')
+    return _model
 
 
 def segment_image(model, image: Image.Image) -> np.ndarray:
-    """Run DeepLabV3 on a PIL image, return a (H, W) class-index array."""
-    input_tensor = _preprocess(image).unsqueeze(0)
-    if torch.cuda.is_available():
-        input_tensor = input_tensor.to('cuda')
-    with torch.no_grad():
-        output = model(input_tensor)['out']
-    return np.argmax(output.data.cpu().numpy(), axis=1)[0]
+    """
+    Run YOLO instance segmentation on a PIL image.
+    Returns a (H, W) array where each pixel holds the painting class ID
+    (matched to our colour map) or 0 for background.
+    """
+    img_np = np.array(image)
+    h, w = img_np.shape[:2]
 
+    results = model(img_np, verbose=False)
+    label_mask = np.zeros((h, w), dtype=np.int32)
 
-def decode_segmap(label_mask: np.ndarray) -> np.ndarray:
-    """Convert a (H, W) class-index array to an (H, W, 3) RGB image."""
-    r = np.zeros_like(label_mask, dtype=np.uint8)
-    g = np.zeros_like(label_mask, dtype=np.uint8)
-    b = np.zeros_like(label_mask, dtype=np.uint8)
-    for cls, color in enumerate(COCO_COLORS):
-        if cls >= len(COCO_COLORS):
-            break
-        idx = label_mask == cls
-        r[idx], g[idx], b[idx] = color
-    return np.stack([r, g, b], axis=2)
+    for result in results:
+        if result.masks is None:
+            continue
+
+        masks = result.masks.data.cpu().numpy()   # (N, H', W')
+        classes = result.boxes.cls.cpu().numpy().astype(int)  # (N,)
+
+        for mask, yolo_cls in zip(masks, classes):
+            painting_cls = YOLO_TO_PAINTING_CLASS.get(yolo_cls)
+            if painting_cls is None:
+                continue
+
+            import cv2
+            mask_u8 = (mask * 255).astype(np.uint8)
+            mask_resized = cv2.resize(mask_u8, (w, h), interpolation=cv2.INTER_NEAREST)
+            label_mask[mask_resized > 127] = painting_cls
+
+    return label_mask
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='Run DeepLabV3 segmentation on an image')
-    parser.add_argument('--image', required=True, help='Path to input image')
-    parser.add_argument('--checkpoint', default=None, help='Ignored — torchvision weights used')
-    args = parser.parse_args()
-
+    import argparse
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
 
+    parser = argparse.ArgumentParser(description='Run YOLO segmentation on an image')
+    parser.add_argument('--image', required=True, help='Path to input image')
+    parser.add_argument('--checkpoint', default=None, help='Ignored — YOLO auto-downloads')
+    args = parser.parse_args()
+
     model = load_model()
     image = Image.open(args.image).convert('RGB')
     label_mask = segment_image(model, image)
-    segmentation_map = decode_segmap(label_mask)
 
-    plt.figure(figsize=(10, 5))
-    plt.subplot(1, 2, 1)
-    plt.imshow(image)
-    plt.title('Original')
-    plt.axis('off')
-    plt.subplot(1, 2, 2)
-    plt.imshow(segmentation_map)
-    plt.title('Segmentation')
-    plt.axis('off')
-    out = args.image.rsplit('.', 1)[0] + '_segmentation.png'
+    # Simple colour visualisation for verification
+    COLORS = {2: (0, 0, 255), 3: (0, 255, 0), 4: (255, 128, 0),
+              6: (255, 255, 0), 15: (255, 0, 0)}
+    vis = np.array(image).copy()
+    for cls_id, (r, g, b) in COLORS.items():
+        vis[label_mask == cls_id] = (r, g, b)
+
+    plt.figure(figsize=(12, 5))
+    plt.subplot(1, 2, 1); plt.imshow(image); plt.title('Original'); plt.axis('off')
+    plt.subplot(1, 2, 2); plt.imshow(vis); plt.title('YOLO Segmentation'); plt.axis('off')
+    out = args.image.rsplit('.', 1)[0] + '_yolo_seg.png'
     plt.savefig(out)
     print(f'Saved: {out}')
