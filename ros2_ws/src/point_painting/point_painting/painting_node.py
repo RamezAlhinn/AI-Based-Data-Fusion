@@ -1,14 +1,32 @@
 import sys
+import struct
 import numpy as np
 import rclpy
 from rclpy.node import Node
-from sensor_msgs.msg import Image, PointCloud2
-from std_msgs.msg import String
+from sensor_msgs.msg import Image, PointCloud2, PointField
+from std_msgs.msg import String, Header
 from cv_bridge import CvBridge
 from PIL import Image as PilImage
 from sensor_msgs_py import point_cloud2 as pc2
 
 from point_painting.painting_logic import init_projector, paint_points
+
+# RGB colors per class ID for the painted point cloud (COCO classes)
+# painted points show their semantic class as a color in Foxglove
+CLASS_COLORS = {
+    0:  (50,  50,  50),   # background — dark grey
+    2:  (0,   0,   255),  # bicycle    — blue
+    4:  (255, 128, 0),    # motorcycle — orange
+    6:  (255, 255, 0),    # bus        — yellow
+    7:  (0,   255, 255),  # train      — cyan
+    15: (255, 0,   0),    # person     — red
+}
+UNPAINTED_COLOR = (30, 30, 30)  # near-black for unpainted points
+
+
+def _color_to_float(r, g, b):
+    packed = struct.pack('BBBB', b, g, r, 0)
+    return struct.unpack('f', packed)[0]
 
 
 class PaintingNode(Node):
@@ -33,12 +51,8 @@ class PaintingNode(Node):
             )
 
         # --- Segmentation model ---
-        # deeplab_repo_path: folder that contains the 'modeling/' package
-        # (i.e. the root of the pytorch-deeplab-xception clone)
-        # checkpoint_path: path to deeplab-resnet.pth.tar
         self.declare_parameter('deeplab_repo_path', '')
         self.declare_parameter('checkpoint_path', '')
-        deeplab_repo = self.get_parameter('deeplab_repo_path').get_parameter_value().string_value
         checkpoint = self.get_parameter('checkpoint_path').get_parameter_value().string_value
 
         try:
@@ -53,6 +67,7 @@ class PaintingNode(Node):
         # The LiDAR and camera were recorded with different clocks so we use a
         # latest-message cache instead of ApproximateTimeSynchronizer.
         self._debug_pub = self.create_publisher(String, '/painting/debug', 10)
+        self._painted_pub = self.create_publisher(PointCloud2, '/painting/painted_cloud', 10)
         self.create_subscription(Image, '/blackfly_s/cam0/image_rectified', self._img_cb, 10)
         self.create_subscription(PointCloud2, '/velodyne/points_raw', self._cloud_cb, 10)
 
@@ -72,12 +87,10 @@ class PaintingNode(Node):
         cv_image = self._bridge.imgmsg_to_cv2(img_msg, desired_encoding='passthrough')
 
         if self._seg_model is not None:
-            # Run DeepLab: BGR numpy → PIL RGB → (H, W) class-index array
             from point_painting.segmentation.deeplab_segmentation import segment_image
             pil_image = PilImage.fromarray(cv_image[..., ::-1])
             seg_image = segment_image(self._seg_model, pil_image)
         else:
-            # Degraded mode: treat first channel of raw image as label map
             seg_image = cv_image[:, :, 0] if cv_image.ndim == 3 else cv_image
 
         points = list(pc2.read_points(cloud_msg, field_names=('x', 'y', 'z'), skip_nans=True))
@@ -85,7 +98,9 @@ class PaintingNode(Node):
             return
 
         xyz = np.array([(p[0], p[1], p[2]) for p in points], dtype=np.float32)
-        painted, skipped, _ = paint_points(xyz, seg_image)
+        painted, skipped, class_ids = paint_points(xyz, seg_image)
+
+        self._publish_painted_cloud(xyz, class_ids, cloud_msg.header)
 
         self._frame_count += 1
         if self._frame_count % 50 == 0:
@@ -95,6 +110,23 @@ class PaintingNode(Node):
         msg = String()
         msg.data = f'frame={self._frame_count} painted={painted} skipped={skipped}'
         self._debug_pub.publish(msg)
+
+    def _publish_painted_cloud(self, xyz: np.ndarray, class_ids: list, header):
+        fields = [
+            PointField(name='x',   offset=0,  datatype=PointField.FLOAT32, count=1),
+            PointField(name='y',   offset=4,  datatype=PointField.FLOAT32, count=1),
+            PointField(name='z',   offset=8,  datatype=PointField.FLOAT32, count=1),
+            PointField(name='rgb', offset=12, datatype=PointField.FLOAT32, count=1),
+        ]
+
+        cloud_data = []
+        for i, (pt, cid) in enumerate(zip(xyz, class_ids)):
+            r, g, b = CLASS_COLORS.get(cid, UNPAINTED_COLOR)
+            rgb_float = _color_to_float(r, g, b)
+            cloud_data.append([float(pt[0]), float(pt[1]), float(pt[2]), rgb_float])
+
+        cloud_msg = pc2.create_cloud(header, fields, cloud_data)
+        self._painted_pub.publish(cloud_msg)
 
 
 def main(args=None):
