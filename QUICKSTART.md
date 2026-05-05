@@ -3,7 +3,7 @@
 All commands run **inside the Dev Container** (`><` → Reopen in Container).  
 Open four terminal tabs in VS Code (`Ctrl+Shift+\`` to split).
 
-> **Visualisation:** RViz2 has no display inside the container. We use **Foxglove Studio** on your Mac instead, connected over a WebSocket bridge on port `8765`.
+> **Visualisation:** RViz2 has no display inside the container. We use **Foxglove Studio** on your Mac instead, connected over a WebSocket bridge on port `9090`.
 
 ---
 
@@ -96,25 +96,25 @@ Roughly 60–70% painted is expected given the camera's ~45° horizontal field o
 RViz2 has no display inside the container. Start the Foxglove WebSocket bridge instead:
 
 ```bash
-ros2 launch foxglove_bridge foxglove_bridge_launch.xml port:=8765
+ros2 launch foxglove_bridge foxglove_bridge_launch.xml port:=9090
 ```
 
 Expected output:
 ```
-[foxglove_bridge]: WebSocket server listening on ws://0.0.0.0:8765
+[foxglove_bridge]: WebSocket server listening on ws://0.0.0.0:9090
 ```
 
 Then on your **Mac**:
 1. Open [Foxglove Studio](https://app.foxglove.dev) (browser or desktop app)
 2. Click **Open connection** → **Foxglove WebSocket**
-3. Enter `ws://localhost:8765` and click **Open**
+3. Enter `ws://localhost:9090` and click **Open**
 
 Inside Foxglove:
 - Click **+** → **3D** panel → subscribe to `/velodyne/points_raw` to see the point cloud
 - Click **+** → **Image** panel → subscribe to `/blackfly_s/cam0/image_rectified` to see the camera feed
 - Click **+** → **Raw Messages** panel → subscribe to `/painting/debug` to watch painted/skipped counts
 
-Port `8765` is automatically forwarded by the devcontainer — no extra configuration needed.
+Port `9090` is automatically forwarded by the devcontainer — no extra configuration needed.
 
 ---
 

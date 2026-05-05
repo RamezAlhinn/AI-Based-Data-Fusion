@@ -34,9 +34,9 @@
       }
     }
   },
-  "forwardPorts": [8765],
+  "forwardPorts": [9090],
   "portsAttributes": {
-    "8765": {
+    "9090": {
       "label": "Foxglove Bridge",
       "onAutoForward": "silent"
     }
