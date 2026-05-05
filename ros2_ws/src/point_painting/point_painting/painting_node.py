@@ -41,21 +41,13 @@ class PaintingNode(Node):
         deeplab_repo = self.get_parameter('deeplab_repo_path').get_parameter_value().string_value
         checkpoint = self.get_parameter('checkpoint_path').get_parameter_value().string_value
 
-        if deeplab_repo and checkpoint:
-            if deeplab_repo not in sys.path:
-                sys.path.insert(0, deeplab_repo)
-            try:
-                from point_painting.segmentation.deeplab_segmentation import load_model
-                self._seg_model = load_model(checkpoint)
-                self.get_logger().info(f'Segmentation model loaded from: {checkpoint}')
-            except Exception as e:
-                self.get_logger().error(f'Failed to load segmentation model: {e}')
-        else:
-            self.get_logger().warn(
-                'No segmentation model loaded — node will use raw image channel as label map. '
-                'Pass: --ros-args -p deeplab_repo_path:=/path/to/pytorch-deeplab-xception '
-                '-p checkpoint_path:=/path/to/deeplab-resnet.pth.tar'
-            )
+        try:
+            from point_painting.segmentation.deeplab_segmentation import load_model
+            self._seg_model = load_model(checkpoint if checkpoint else None)
+            self.get_logger().info('Segmentation model loaded (torchvision DeepLabV3-ResNet101)')
+        except Exception as e:
+            self.get_logger().error(f'Failed to load segmentation model: {e}')
+            self.get_logger().warn('Node will use raw image channel as label map.')
 
         # --- Publishers / Subscribers ---
         # The LiDAR and camera were recorded with different clocks so we use a

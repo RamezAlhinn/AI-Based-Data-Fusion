@@ -40,27 +40,28 @@ Expected output:
 
 ### Mode B — Full pipeline with DeepLab segmentation
 
-The `pytorch-deeplab-xception` repo is baked into the image at `/opt/deeplab` — no extra cloning needed.  
-You only need the checkpoint file. Download `deeplab-resnet.pth.tar` and place it in your project root on your Mac; it will appear at `/workspace/deeplab-resnet.pth.tar` inside the container.
+No checkpoint file needed. The node uses torchvision's built-in DeepLabV3-ResNet101 pretrained on
+COCO, which includes driving-relevant classes (person=15, bicycle=2, motorcycle=4, bus=6).
+Weights (~330 MB) are downloaded automatically on first run and cached in `/root/.cache/torch`.
 
 ```bash
 source /workspace/ros2_ws/install/setup.bash
 
-ros2 run point_painting painting_node --ros-args \
-  -p calib_file:=/workspace/calib.txt \
-  -p deeplab_repo_path:=/opt/deeplab \
-  -p checkpoint_path:=/workspace/deeplab-resnet.pth.tar
+ros2 run point_painting painting_node \
+  --ros-args -p calib_file:=/workspace/calib.txt
 ```
 
 Expected output:
 ```
 [INFO] Loaded calibration from: /workspace/calib.txt
-[INFO] Segmentation model loaded from: /workspace/deeplab-resnet.pth.tar
+[INFO] Segmentation model loaded (torchvision DeepLabV3-ResNet101)
 [INFO] PaintingNode started, waiting for synced messages...
 ```
 
-`class_ids` are now real semantic labels (0=background, 7=car, 15=person, ...).  
-Note: DeepLab on CPU adds ~2–5 seconds per frame — the node processes every frame it receives.
+`class_ids` are real semantic labels. Driving-relevant ones:
+- `2` = bicycle, `4` = motorcycle, `6` = bus, `15` = person
+
+Note: DeepLabV3 on CPU adds ~2–5 seconds per frame.
 
 ---
 
