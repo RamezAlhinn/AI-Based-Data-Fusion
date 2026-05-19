@@ -10,8 +10,8 @@ Design decisions:
       with well-validated COCO accuracy; YOLO26 is experimental and less reliable.
     - Label mask is initialised to -1 (not 0) because COCO class 0 = person.
       Zero-initialisation would label all background pixels as person.
-    - Confidence threshold is set to 0.15 (below YOLO default of 0.25) to
-      catch small or partially occluded objects like distant pedestrians.
+    - Confidence threshold is set to 0.5 (YOLO recommended minimum). Values below
+      this cause false positives — e.g. a car being hallucinated as bus or truck.
     - Masks are resized back to the full input image resolution so pixel
       coordinates from the LiDAR projection map directly onto the mask.
     - Mask priority ordering: vehicles painted first, person/bicycle/motorcycle
@@ -48,7 +48,7 @@ def segment_image(model, image: Image.Image) -> np.ndarray:
     img_np = np.array(image)
     h, w = img_np.shape[:2]
 
-    results = model(img_np, verbose=False, conf=0.15)
+    results = model(img_np, verbose=False, conf=0.5)
     label_mask = np.full((h, w), -1, dtype=np.int32)  # -1 = background/no detection
 
     # Priority order: vehicles first, vulnerable road users last so they
@@ -79,7 +79,7 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description='Run YOLO segmentation on an image')
     parser.add_argument('--image', required=True, help='Path to input image')
-    parser.add_argument('--checkpoint', default=None, help='Path to YOLO model file (default: yolo26n-seg.pt)')
+    parser.add_argument('--checkpoint', default=None, help='Path to YOLO model file (default: yolo11n-seg.pt)')
     args = parser.parse_args()
 
     model = load_model(args.checkpoint)
