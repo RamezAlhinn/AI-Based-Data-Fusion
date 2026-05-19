@@ -53,8 +53,9 @@ RUN pip3 install --no-cache-dir \
     matplotlib
 
 # ── YOLO segmentation model ────────────────────────────────────────────────────
-# Pre-download at build time so the container works offline and first run is instant.
-RUN python3 -c "from ultralytics import YOLO; YOLO('yolo11m-seg.pt')"
+# Download directly to /workspace so the isolation script always loads the
+# explicit path and never falls back to the ultralytics cache directory.
+RUN python3 -c "from ultralytics import YOLO; import shutil, os; m = YOLO('yolo11m-seg.pt'); shutil.copy2(m.ckpt_path, '/workspace/yolo11m-seg.pt') if os.path.abspath(m.ckpt_path) != '/workspace/yolo11m-seg.pt' else None"
 
 # ── Environment & UX ───────────────────────────────────────────────────────────
 ENV ROS_DOMAIN_ID=42
