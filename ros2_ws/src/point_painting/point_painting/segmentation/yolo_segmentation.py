@@ -6,12 +6,13 @@ Provides two public functions used by the painting node and the isolation test:
     segment_image(model, image)      — run segmentation, return (H, W) class ID array
 
 Design decisions:
-    - YOLO11n-seg is used (not YOLO26) — YOLO11 is the stable production release
-      with well-validated COCO accuracy; YOLO26 is experimental and less reliable.
+    - YOLO11s-seg is used — the small model (~22 MB) rather than nano (~6 MB).
+      The extra capacity is needed for dark/underexposed objects like the black BMW
+      in this dataset; nano misses them at any reasonable confidence threshold.
     - Label mask is initialised to -1 (not 0) because COCO class 0 = person.
       Zero-initialisation would label all background pixels as person.
-    - Confidence threshold is set to 0.5 (YOLO recommended minimum). Values below
-      this cause false positives — e.g. a car being hallucinated as bus or truck.
+    - Confidence threshold is set to 0.25 (YOLO's validated default). 0.5 caused
+      missed detections on dark vehicles; 0.15 caused false bus/truck labels.
     - Masks are resized back to the full input image resolution so pixel
       coordinates from the LiDAR projection map directly onto the mask.
     - Mask priority ordering: vehicles painted first, person/bicycle/motorcycle
@@ -29,11 +30,11 @@ from PIL import Image
 
 def load_model(checkpoint_path: str = None):
     """
-    Load YOLO11n-seg model. Auto-downloads on first use (~6 MB, cached).
+    Load YOLO11s-seg model. Auto-downloads on first use (~22 MB, cached).
     Pass checkpoint_path to override with a local file.
     """
     from ultralytics import YOLO
-    model_path = checkpoint_path if checkpoint_path else 'yolo11n-seg.pt'
+    model_path = checkpoint_path if checkpoint_path else 'yolo11s-seg.pt'
     return YOLO(model_path)
 
 
@@ -48,7 +49,7 @@ def segment_image(model, image: Image.Image) -> np.ndarray:
     img_np = np.array(image)
     h, w = img_np.shape[:2]
 
-    results = model(img_np, verbose=False, conf=0.5)
+    results = model(img_np, verbose=False, conf=0.25)
     label_mask = np.full((h, w), -1, dtype=np.int32)  # -1 = background/no detection
 
     # Priority order: vehicles first, vulnerable road users last so they
@@ -79,7 +80,7 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description='Run YOLO segmentation on an image')
     parser.add_argument('--image', required=True, help='Path to input image')
-    parser.add_argument('--checkpoint', default=None, help='Path to YOLO model file (default: yolo11n-seg.pt)')
+    parser.add_argument('--checkpoint', default=None, help='Path to YOLO model file (default: yolo11s-seg.pt)')
     args = parser.parse_args()
 
     model = load_model(args.checkpoint)

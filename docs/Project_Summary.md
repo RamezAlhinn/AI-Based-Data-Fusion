@@ -66,7 +66,7 @@ Optional — custom YOLO model:
 ros2 run point_painting painting_node \
   --ros-args \
   -p calib_file:=/workspace/calib.txt \
-  -p checkpoint_path:=/workspace/yolo11n-seg.pt
+  -p checkpoint_path:=/workspace/yolo11s-seg.pt
 ```
 
 ---
@@ -77,7 +77,7 @@ Built on top of colleagues' initial YOLO work (Code branch) but with class label
 
 - Their version: published a binary black/white mask — class information discarded
 - This version: returns a full `(H, W)` array with native COCO class IDs per pixel
-- Uses **YOLO11n-seg** — the stable nano segmentation model from Ultralytics, auto-downloads (~6 MB)
+- Uses **YOLO11s-seg** — the small model from Ultralytics (~22 MB), chosen over nano because the dataset has dark/underexposed vehicles that nano misses
 - Confidence threshold set to `0.15` to catch small/partially occluded objects
 - Background initialised to `-1` (not `0`) — COCO class 0 is `person`, so zero-init caused everything to be labelled as person
 

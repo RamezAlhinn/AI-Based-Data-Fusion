@@ -38,7 +38,7 @@ rng = random.Random(args.seed)
 BAG_PATH   = '/workspace/studentProject1/'
 CALIB_PATH = '/workspace/calib.txt'
 OUTPUT_DIR = '/workspace/isolation_output'
-YOLO_MODEL = 'yolo11n-seg.pt'
+YOLO_MODEL = 'yolo11s-seg.pt'
 
 # COCO class colours (BGR for OpenCV): person=0, bicycle=1, car=2, motorcycle=3, bus=5, truck=7
 CLASS_COLORS_BGR = {
@@ -129,7 +129,7 @@ model = YOLO(YOLO_MODEL)
 img_rgb = cv2.cvtColor(img_frame, cv2.COLOR_BGR2RGB)
 h, w = img_frame.shape[:2]
 
-results = model(img_rgb, verbose=False, conf=0.5)
+results = model(img_rgb, verbose=False, conf=0.25)
 label_mask = np.full((h, w), -1, dtype=np.int32)  # -1 = background/no detection
 
 PRIORITY = {0: 10, 1: 9, 3: 8}  # person > bicycle > motorcycle > everything else
