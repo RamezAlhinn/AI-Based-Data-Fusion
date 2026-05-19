@@ -50,7 +50,7 @@ ros2 run point_painting painting_node \
 Expected output:
 ```
 [INFO] Loaded calibration from: /workspace/calib.txt
-[INFO] Segmentation model loaded: yolo11s-seg.pt
+[INFO] Segmentation model loaded: yolo11m-seg.pt
 [INFO] PaintingNode started, waiting for synced messages...
 ```
 
@@ -59,7 +59,7 @@ To use a custom model file (e.g. a fine-tuned checkpoint):
 ros2 run point_painting painting_node \
   --ros-args \
   -p calib_file:=/workspace/calib.txt \
-  -p checkpoint_path:=/workspace/yolo11s-seg.pt
+  -p checkpoint_path:=/workspace/yolo11m-seg.pt
 ```
 
 **Colour map in Foxglove 3D view:**

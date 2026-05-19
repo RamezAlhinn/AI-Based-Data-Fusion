@@ -38,7 +38,7 @@ rng = random.Random(args.seed)
 BAG_PATH   = '/workspace/studentProject1/'
 CALIB_PATH = '/workspace/calib.txt'
 OUTPUT_DIR = '/workspace/isolation_output'
-YOLO_MODEL = 'yolo11s-seg.pt'
+YOLO_MODEL = 'yolo11m-seg.pt'
 
 # COCO class colours (BGR for OpenCV): person=0, bicycle=1, car=2, motorcycle=3, bus=5, truck=7
 CLASS_COLORS_BGR = {

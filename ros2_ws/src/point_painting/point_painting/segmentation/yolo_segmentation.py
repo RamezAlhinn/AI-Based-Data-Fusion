@@ -2,13 +2,13 @@
 YOLO instance segmentation wrapper for PointPainting.
 
 Provides two public functions used by the painting node and the isolation test:
-    load_model(checkpoint_path)      — load YOLO11n-seg (auto-downloads if not found)
+    load_model(checkpoint_path)      — load YOLO11m-seg (auto-downloads if not found)
     segment_image(model, image)      — run segmentation, return (H, W) class ID array
 
 Design decisions:
-    - YOLO11s-seg is used — the small model (~22 MB) rather than nano (~6 MB).
+    - YOLO11m-seg is used — the medium model (~42 MB) rather than nano/small.
       The extra capacity is needed for dark/underexposed objects like the black BMW
-      in this dataset; nano misses them at any reasonable confidence threshold.
+      in this dataset, and improves person detection at distance.
     - Label mask is initialised to -1 (not 0) because COCO class 0 = person.
       Zero-initialisation would label all background pixels as person.
     - Confidence threshold is set to 0.25 (YOLO's validated default). 0.5 caused
@@ -30,11 +30,11 @@ from PIL import Image
 
 def load_model(checkpoint_path: str = None):
     """
-    Load YOLO11s-seg model. Auto-downloads on first use (~22 MB, cached).
+    Load YOLO11m-seg model. Auto-downloads on first use (~42 MB, cached).
     Pass checkpoint_path to override with a local file.
     """
     from ultralytics import YOLO
-    model_path = checkpoint_path if checkpoint_path else 'yolo11s-seg.pt'
+    model_path = checkpoint_path if checkpoint_path else 'yolo11m-seg.pt'
     return YOLO(model_path)
 
 
@@ -80,7 +80,7 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description='Run YOLO segmentation on an image')
     parser.add_argument('--image', required=True, help='Path to input image')
-    parser.add_argument('--checkpoint', default=None, help='Path to YOLO model file (default: yolo11s-seg.pt)')
+    parser.add_argument('--checkpoint', default=None, help='Path to YOLO model file (default: yolo11m-seg.pt)')
     args = parser.parse_args()
 
     model = load_model(args.checkpoint)
