@@ -30,6 +30,8 @@ import cv2
 parser = argparse.ArgumentParser()
 parser.add_argument('--seed', type=int, default=None,
                     help='Random seed for frame selection (omit for a new random frame each run)')
+parser.add_argument('--checkpoint', type=str, default=None,
+                    help='Path to YOLO model file (default: yolo11m-seg.pt)')
 args = parser.parse_args()
 
 rng = random.Random(args.seed)
@@ -38,7 +40,7 @@ rng = random.Random(args.seed)
 BAG_PATH   = '/workspace/studentProject1/'
 CALIB_PATH = '/workspace/calib.txt'
 OUTPUT_DIR = '/workspace/isolation_output'
-YOLO_MODEL = 'yolo11m-seg.pt'
+YOLO_MODEL = args.checkpoint if args.checkpoint else 'yolo11m-seg.pt'
 
 # COCO class colours (BGR for OpenCV): person=0, bicycle=1, car=2, motorcycle=3, bus=5, truck=7
 CLASS_COLORS_BGR = {
