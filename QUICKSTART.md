@@ -37,7 +37,7 @@ Expected output:
 
 ### Mode B — Full pipeline with YOLO segmentation
 
-No model file needed. YOLO26n-seg downloads automatically on first run (~6 MB, cached).  
+No model file needed. YOLO11n-seg downloads automatically on first run (~6 MB, cached).  
 Uses native COCO class IDs: `0`=person, `1`=bicycle, `2`=car, `3`=motorcycle, `5`=bus, `7`=truck.
 
 ```bash
@@ -50,7 +50,7 @@ ros2 run point_painting painting_node \
 Expected output:
 ```
 [INFO] Loaded calibration from: /workspace/calib.txt
-[INFO] Segmentation model loaded: yolo26n-seg.pt
+[INFO] Segmentation model loaded: yolo11n-seg.pt
 [INFO] PaintingNode started, waiting for synced messages...
 ```
 
@@ -59,7 +59,7 @@ To use a custom model file (e.g. a fine-tuned checkpoint):
 ros2 run point_painting painting_node \
   --ros-args \
   -p calib_file:=/workspace/calib.txt \
-  -p checkpoint_path:=/workspace/yolo26n-seg.pt
+  -p checkpoint_path:=/workspace/yolo11n-seg.pt
 ```
 
 **Colour map in Foxglove 3D view:**

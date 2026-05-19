@@ -15,7 +15,7 @@ Published topics:
 Parameters:
     calib_file      (str) — path to KITTI-format calibration file (calib.txt)
     checkpoint_path (str) — optional path to a custom YOLO model file
-                            defaults to yolo26n-seg.pt (auto-downloaded)
+                            defaults to yolo11n-seg.pt (auto-downloaded)
 """
 
 import sys
@@ -93,7 +93,7 @@ class PaintingNode(Node):
         try:
             from point_painting.segmentation.yolo_segmentation import load_model
             self._seg_model = load_model(checkpoint if checkpoint else None)
-            model_name = checkpoint if checkpoint else 'yolo26n-seg.pt'
+            model_name = checkpoint if checkpoint else 'yolo11n-seg.pt'
             self.get_logger().info(f'Segmentation model loaded: {model_name}')
         except Exception as e:
             self.get_logger().error(f'Failed to load segmentation model: {e}')

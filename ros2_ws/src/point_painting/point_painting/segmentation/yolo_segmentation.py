@@ -2,16 +2,20 @@
 YOLO instance segmentation wrapper for PointPainting.
 
 Provides two public functions used by the painting node and the isolation test:
-    load_model(checkpoint_path)      — load YOLO26n-seg (auto-downloads if not found)
+    load_model(checkpoint_path)      — load YOLO11n-seg (auto-downloads if not found)
     segment_image(model, image)      — run segmentation, return (H, W) class ID array
 
 Design decisions:
+    - YOLO11n-seg is used (not YOLO26) — YOLO11 is the stable production release
+      with well-validated COCO accuracy; YOLO26 is experimental and less reliable.
     - Label mask is initialised to -1 (not 0) because COCO class 0 = person.
       Zero-initialisation would label all background pixels as person.
     - Confidence threshold is set to 0.15 (below YOLO default of 0.25) to
       catch small or partially occluded objects like distant pedestrians.
     - Masks are resized back to the full input image resolution so pixel
       coordinates from the LiDAR projection map directly onto the mask.
+    - Mask priority ordering: vehicles painted first, person/bicycle/motorcycle
+      painted last so a pedestrian in front of a car is labelled as person.
 
 Built on top of the initial YOLO script from carlosaterans-cmd (Code branch)
 but with class labels preserved — their version published a binary mask and
@@ -25,11 +29,11 @@ from PIL import Image
 
 def load_model(checkpoint_path: str = None):
     """
-    Load YOLO26n-seg model. Auto-downloads on first use (~6 MB, cached).
+    Load YOLO11n-seg model. Auto-downloads on first use (~6 MB, cached).
     Pass checkpoint_path to override with a local file.
     """
     from ultralytics import YOLO
-    model_path = checkpoint_path if checkpoint_path else 'yolo26n-seg.pt'
+    model_path = checkpoint_path if checkpoint_path else 'yolo11n-seg.pt'
     return YOLO(model_path)
 
 

@@ -12,7 +12,7 @@ A real-time **Camera + LiDAR fusion pipeline** running on ROS 2 Humble inside a 
 The algorithm is called **PointPainting** (Vora et al., 2020): project each 3D LiDAR point onto the camera image, read the semantic label at that pixel, and attach it to the point.
 
 ```
-Camera Image ──► YOLO26n-seg ──► Per-pixel class labels ──┐
+Camera Image ──► YOLO11n-seg ──► Per-pixel class labels ──┐
                                                            ▼
 LiDAR Point Cloud ─────────────────────────► Project + Paint
                                                            │
@@ -66,7 +66,7 @@ Optional — custom YOLO model:
 ros2 run point_painting painting_node \
   --ros-args \
   -p calib_file:=/workspace/calib.txt \
-  -p checkpoint_path:=/workspace/yolo26n-seg.pt
+  -p checkpoint_path:=/workspace/yolo11n-seg.pt
 ```
 
 ---
@@ -77,7 +77,7 @@ Built on top of colleagues' initial YOLO work (Code branch) but with class label
 
 - Their version: published a binary black/white mask — class information discarded
 - This version: returns a full `(H, W)` array with native COCO class IDs per pixel
-- Uses **YOLO26n-seg** — the nano segmentation model from Ultralytics, auto-downloads (~6 MB)
+- Uses **YOLO11n-seg** — the stable nano segmentation model from Ultralytics, auto-downloads (~6 MB)
 - Confidence threshold set to `0.15` to catch small/partially occluded objects
 - Background initialised to `-1` (not `0`) — COCO class 0 is `person`, so zero-init caused everything to be labelled as person
 
@@ -166,7 +166,7 @@ DONE ✅                                  TODO ⬜
 ROS 2 devcontainer (Docker)              Merge feature branch → main
 Bag playback + clock handling            PointPillars 3D detector
 Camera + LiDAR latest-msg sync          AB3DMOT tracker
-YOLO26n-seg segmentation w/ classes     Performance profiling
+YOLO11n-seg segmentation w/ classes     Performance profiling
 LiDAR → image projection (verified)     Camera intrinsics verification
 PointPainting (single projection pass)    (checkerboard calibration)
 Painted point cloud (/painted_cloud)
@@ -202,7 +202,7 @@ AI-Based-Data-Fusion/
         ├── painting_logic.py
         ├── rosbag_extractor.py
         ├── segmentation/
-        │   └── yolo_segmentation.py       ← YOLO26n-seg with class labels
+        │   └── yolo_segmentation.py       ← YOLO11n-seg with class labels
         └── test/
             └── test_painting_node.py
 ```
