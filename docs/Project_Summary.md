@@ -147,14 +147,16 @@ rotation    : quaternion [x=-0.534, y=0.543, z=-0.464, w=0.452]
 
 The KITTI format needs the inverse transform (camera→LiDAR inverted), confirmed by verifying a point 10m ahead projects correctly to pixel (910, 174).
 
-**Intrinsics** — estimated from Blackfly S hardware specs (no `/camera_info` topic in bag):
+**Intrinsics** — from professor-provided calibration YAML (`camera_front_center_autoware_camera_calibration.yaml`):
 
-| Parameter | Value |
-|---|---|
-| `fx = fy` | 2318.8 px |
-| `cx` | 959.5 px (image centre) |
-| `cy` | 599.5 px (image centre) |
-| Implied HFOV | ~45° |
+| Parameter | Value | Note |
+|---|---|---|
+| `fx` | 880.5 px | Previously estimated as 2318.8 — 2.6× wrong |
+| `fy` | 878.7 px | |
+| `cx` | 926.4 px | Previously assumed image centre (959.5) |
+| `cy` | 578.8 px | Previously assumed image centre (599.5) |
+| Implied HFOV | ~65° | Wider lens than originally assumed |
+| Distortion | [-0.331, 0.126, -0.0005, -0.0001, -0.023] | Barrel distortion — not applied (image is pre-rectified) |
 
 ---
 
