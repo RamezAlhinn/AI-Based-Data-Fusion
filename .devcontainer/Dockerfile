@@ -52,9 +52,9 @@ RUN pip3 install --no-cache-dir \
     pillow \
     matplotlib
 
-# ── DeepLab segmentation model ─────────────────────────────────────────────────
-RUN git clone https://github.com/jfzhang95/pytorch-deeplab-xception.git /opt/deeplab
-ENV DEEPLAB_REPO=/opt/deeplab
+# ── YOLO segmentation model ────────────────────────────────────────────────────
+# Pre-download at build time so the container works offline and first run is instant.
+RUN python3 -c "from ultralytics import YOLO; YOLO('yolo11m-seg.pt')"
 
 # ── Environment & UX ───────────────────────────────────────────────────────────
 ENV ROS_DOMAIN_ID=42
