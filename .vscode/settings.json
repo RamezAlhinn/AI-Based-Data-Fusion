@@ -1,3 +1,7 @@
 {
-    "cmake.sourceDirectory": "/Users/User/git/AI-Based-Data-Fusion/ros2_ws/src/fusion_msgs"
+    "cmake.sourceDirectory": "/Users/User/git/AI-Based-Data-Fusion/ros2_ws/src/fusion_msgs",
+    "python-envs.defaultEnvManager": "ms-python.python:venv",
+    "python.analysis.extraPaths": [
+        "./AI-Based-Data-Fusion"
+    ]
 }
