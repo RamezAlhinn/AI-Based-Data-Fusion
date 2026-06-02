@@ -46,6 +46,7 @@ RUN pip3 install --no-cache-dir \
 RUN pip3 install --no-cache-dir \
     numpy \
     scipy \
+    scikit-learn \
     ultralytics \
     open3d
 
