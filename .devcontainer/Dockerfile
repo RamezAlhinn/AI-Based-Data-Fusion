@@ -47,6 +47,7 @@ RUN pip3 install --no-cache-dir \
 RUN pip3 install --no-cache-dir \
     "numpy<2.0" \
     scipy \
+    scikit-learn \
     ultralytics \
     open3d \
     pillow \
