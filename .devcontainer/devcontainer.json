@@ -34,6 +34,13 @@
       }
     }
   },
-  "postStartCommand": "cd /workspace/ros2_ws && colcon build --symlink-install 2>/dev/null || true",
+  "forwardPorts": [9090],
+  "portsAttributes": {
+    "9090": {
+      "label": "Foxglove Bridge",
+      "onAutoForward": "silent"
+    }
+  },
+  "postStartCommand": "[ -f /workspace/yolo11m-seg.pt ] || cp /yolo11m-seg.pt /workspace/yolo11m-seg.pt 2>/dev/null || true; cd /workspace/ros2_ws && colcon build --symlink-install 2>/dev/null || true",
   "remoteUser": "root"
 }
