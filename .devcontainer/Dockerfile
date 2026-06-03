@@ -7,6 +7,7 @@ FROM ros:humble-ros-base
 ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
+    wget \
     gnupg2 \
     lsb-release \
     locales \
@@ -54,9 +55,10 @@ RUN pip3 install --no-cache-dir \
     matplotlib
 
 # ── YOLO segmentation model ────────────────────────────────────────────────────
-# Download directly to /workspace so the isolation script always loads the
-# explicit path and never falls back to the ultralytics cache directory.
-RUN python3 -c "from ultralytics import YOLO; import shutil, os; m = YOLO('yolo11m-seg.pt'); shutil.copy2(m.ckpt_path, '/workspace/yolo11m-seg.pt') if os.path.abspath(m.ckpt_path) != '/workspace/yolo11m-seg.pt' else None"
+# Pre-download at build time to /yolo11m-seg.pt (not /workspace, which gets shadowed
+# by the bind-mount at runtime) so the container works offline and first run is instant.
+RUN python3 -c "from ultralytics import YOLO; import shutil, os; m = YOLO('yolo11m-seg.pt'); shutil.copy2(m.ckpt_path, '/yolo11m-seg.pt') if os.path.abspath(m.ckpt_path) != '/yolo11m-seg.pt' else None"
+
 
 # ── Environment & UX ───────────────────────────────────────────────────────────
 ENV ROS_DOMAIN_ID=42

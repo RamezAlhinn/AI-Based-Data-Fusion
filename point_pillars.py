@@ -106,9 +106,11 @@ class PillarFeatureNet(nn.Module):
         super().__init__()
         feat_channels = feat_channels or [64]
 
-        # mmdet3d adds: x_centre, y_centre, z_centre offsets (3)
-        # and x_norm, y_norm within the pillar (2)  → +5 augmented features
-        augmented_in = in_channels + 5
+        # 10 fixed channels: [x,y,z,r] + [dx_c,dy_c,dz_c] + [dx_p,dy_p,dz_p]
+        # matches mmdet3d with_cluster_center=True, with_voxel_center=True, with_distance=False
+        # plus any painting score channels beyond the first 4 base channels
+        painting_channels = max(0, in_channels - 4)
+        augmented_in = 10 + painting_channels
 
         layers = []
         prev = augmented_in
@@ -123,39 +125,64 @@ class PillarFeatureNet(nn.Module):
         self.out_channels = prev
 
     def forward(self, pillars: torch.Tensor,
-                num_points: torch.Tensor) -> torch.Tensor:
+                num_points: torch.Tensor,
+                coords: torch.Tensor) -> torch.Tensor:
         """
-        pillars   : (P, N, C)   — P pillars, N points each, C features
+        pillars   : (P, N, C)   — P pillars, N points each, C features (x,y,z,r,...)
         num_points: (P,)        — actual point count per pillar
+        coords    : (P, 4)      — [batch, z(0), iy, ix] pillar grid indices
 
         Returns: (P, C_out)
+        Assembles a 10-channel augmented tensor matching mmdet3d KITTI checkpoint
+        (with_cluster_center=True, with_voxel_center=True, with_distance=False):
+          0-3: x, y, z, r                  (raw point features)
+          4-6: x-xc, y-yc, z-zc           (offset from cluster arithmetic mean)
+          7-9: x-xp, y-yp, z-zp           (offset from geometric voxel centre)
         """
         P, N, C = pillars.shape
+        device  = pillars.device
 
-        # Pillar centre offset augmentation
-        # mean over valid points only
-        mask = torch.arange(N, device=pillars.device).unsqueeze(0) < \
-               num_points.unsqueeze(1)                          # (P, N)
-        mask_f = mask.unsqueeze(-1).float()                    # (P, N, 1)
+        mask   = torch.arange(N, device=device).unsqueeze(0) < \
+                 num_points.unsqueeze(1)                           # (P, N)
+        mask_f = mask.unsqueeze(-1).float()                       # (P, N, 1)
 
-        sum_pts = (pillars[:, :, :3] * mask_f).sum(dim=1)     # (P, 3)
-        cnt     = num_points.float().clamp(min=1).unsqueeze(1) # (P, 1)
-        centre  = sum_pts / cnt                                 # (P, 3)
+        # ── cluster mean offset (x_c, y_c, z_c computed over valid points) ──────
+        sum_pts = (pillars[:, :, :3] * mask_f).sum(dim=1)        # (P, 3)
+        cnt     = num_points.float().clamp(min=1).unsqueeze(1)    # (P, 1)
+        centre  = sum_pts / cnt                                    # (P, 3)
+        d_cluster = pillars[:, :, :3] - centre.unsqueeze(1)      # (P, N, 3)
 
-        offset  = pillars[:, :, :3] - centre.unsqueeze(1)     # (P, N, 3)
+        # ── geometric voxel centre from grid indices ─────────────────────────
+        # coords[:, 3] = ix (column), coords[:, 2] = iy (row)
+        # z-centre is fixed: z_min + voxel_z/2 = -3.0 + 4.0/2 = -1.0
+        DX, DY   = 0.16, 0.16
+        X_MIN    = 0.0
+        Y_MIN    = -39.68
+        Z_CENTRE = -1.0    # z_min(-3.0) + voxel_z(4.0)/2
+        ix = coords[:, 3].float().to(device)                      # (P,)
+        iy = coords[:, 2].float().to(device)                      # (P,)
+        xp = (ix * DX + X_MIN + DX / 2.0).view(P, 1, 1).expand(P, N, 1)
+        yp = (iy * DY + Y_MIN + DY / 2.0).view(P, 1, 1).expand(P, N, 1)
+        zp = pillars.new_full((P, N, 1), Z_CENTRE)
+        d_pillar_x = pillars[:, :, 0:1] - xp                     # (P, N, 1)
+        d_pillar_y = pillars[:, :, 1:2] - yp                     # (P, N, 1)
+        d_pillar_z = pillars[:, :, 2:3] - zp                     # (P, N, 1)
 
-        # x_norm, y_norm: position within pillar relative to pillar bounds
-        # (simplified: just use offset / voxel_size — close enough)
-        augmented = torch.cat([pillars, offset, offset[:, :, :2]], dim=-1)
-        augmented = augmented * mask_f                         # zero padded pts
+        # ── assemble 10-channel tensor and zero out padding ───────────────────
+        # Base: [x,y,z,r] + any extra painting score channels beyond index 3
+        base  = pillars[:, :, :4]                                 # (P, N, 4)
+        extra = pillars[:, :, 4:] if C > 4 else None             # (P, N, C-4) or None
+        parts = [base, d_cluster, d_pillar_x, d_pillar_y, d_pillar_z]
+        if extra is not None:
+            parts.append(extra)
+        augmented = torch.cat(parts, dim=-1)  # (P,N,10) standard or (P,N,10+C-4) painted
+        augmented = augmented * mask_f
 
-        # Flatten → linear → unflatten
         flat = augmented.view(P * N, -1)
         feat = self.layers(flat).view(P, N, -1)
 
-        # Max-pool over points (ignore padding)
         feat = feat * mask_f
-        feat = feat.max(dim=1).values                          # (P, C_out)
+        feat = feat.max(dim=1).values                             # (P, C_out)
         return feat
 
 
@@ -496,7 +523,7 @@ class PointPillars(nn.Module):
         coords_t    = torch.from_numpy(coords_np)         # (P, 4)
 
         # PFN
-        pf = self.pfn(pillars_t, num_pts_t)               # (P, 64)
+        pf = self.pfn(pillars_t, num_pts_t, coords_t)     # (P, 64)
 
         # Scatter
         bev = self.scatter(pf, coords_t, batch_size=1)    # (1, 64, ny, nx)
@@ -543,11 +570,11 @@ class PointPillars(nn.Module):
         loc_np = _flatten(loc_pred, 7)       # (H*W*n_anch, 7)
         dir_np = _flatten(dir_pred, 2)       # (H*W*n_anch, 2)
 
-        # Temperature-scaled sigmoid: the pretrained KITTI model applied to our
-        # sensor produces raw logits ~-3 to -2.7 (sigmoid ~0.05-0.06) due to
-        # domain gap. Temperature T=5 rescales so the best anchors reach ~0.3-0.5,
-        # making scores interpretable while preserving relative ranking exactly.
-        T = 5.0
+        # Sigmoid without temperature scaling: the BN variance clamping fix ensures
+        # that activation magnitudes are properly normalized, so logits are in the
+        # natural range [-1, 0] instead of the saturated [-172, -1] we had before.
+        # Therefore, plain sigmoid is appropriate — T=1.0 (no scaling).
+        T = 1.0
         scores_all = 1.0 / (1.0 + np.exp(-np.clip(cls_np * T, -20, 20)))  # (M, n_cls)
         class_ids  = scores_all.argmax(axis=1)
         class_scr  = scores_all.max(axis=1)
@@ -586,9 +613,53 @@ class PointPillars(nn.Module):
         if not final_boxes:
             return empty
 
-        return (np.concatenate(final_boxes),
-                np.concatenate(final_scores),
-                np.concatenate(final_labels))
+        final_boxes   = np.concatenate(final_boxes)     # (K, 7)
+        final_scores  = np.concatenate(final_scores)    # (K,)
+        final_labels  = np.concatenate(final_labels)    # (K,)
+
+        # ── Filter detections by LiDAR occupancy (glass hallucination fix) ──
+        # After BN variance clamping, the model produces high scores in
+        # LiDAR-empty regions (e.g., reflections on glass). Filter these out
+        # by checking if each detection overlaps with occupied pillars.
+        #
+        # Build occupancy map from voxel coordinates (regions with actual points)
+        # coords_np format: [batch=0, pad=0, iy, ix]
+        occupied_pillars = set()
+        for i in range(len(coords_np)):
+            y_idx = int(coords_np[i, 2])  # iy index
+            x_idx = int(coords_np[i, 3])  # ix index
+            occupied_pillars.add((y_idx, x_idx))
+
+        # Filter: keep only detections that overlap with occupied pillars
+        kept = []
+        for i, box in enumerate(final_boxes):
+            cx, cy, cz, w, l, h, heading = box
+            
+            # Convert box bounds to pillar indices
+            x_min = (cx - l/2 - cfg.x_min) / cfg.voxel_x
+            x_max = (cx + l/2 - cfg.x_min) / cfg.voxel_x
+            y_min = (cy - w/2 - cfg.y_min) / cfg.voxel_y
+            y_max = (cy + w/2 - cfg.y_min) / cfg.voxel_y
+            
+            # Check if ANY pillar in this box region is occupied
+            has_lidar = False
+            for py_idx in range(int(np.floor(y_min)), int(np.ceil(y_max)) + 1):
+                if has_lidar:
+                    break
+                for px_idx in range(int(np.floor(x_min)), int(np.ceil(x_max)) + 1):
+                    if (py_idx, px_idx) in occupied_pillars:
+                        has_lidar = True
+                        break
+            
+            if has_lidar:
+                kept.append(i)
+
+        if len(kept) == 0:
+            return empty
+
+        return (final_boxes[kept],
+                final_scores[kept],
+                final_labels[kept])
 
     # ── Checkpoint loading ────────────────────────────────────────────────────
 
@@ -650,9 +721,9 @@ class PointPillars(nn.Module):
                 else:
                     new_sd[k] = v
 
-            # ── PFN weight partial load (painted model has more input channels) ──
-            # Pretrained: in_channels=5 base → 5+5 aug = 10 → linear weight (64,10)
-            # Painted:    in_channels=7 base → 7+5 aug = 12 → linear weight (64,12)
+            # ── PFN weight partial load (painted model has extra input channels) ──
+            # Pretrained: in_channels=4 → 10-ch augmented → linear weight (64,10)
+            # Painted:    in_channels=7 → 13-ch augmented → linear weight (64,13)
             # Copy the first 10 columns; painting score cols remain zero-initialised.
             pfn_w_key = 'pfn.layers.0.weight'
             if pfn_w_key in new_sd:
@@ -667,6 +738,56 @@ class PointPillars(nn.Module):
                           f'{tuple(ckpt_w.shape)} → {tuple(model_w.shape)} '
                           f'(first {cols} cols copied; painting cols zero-init)')
                     del new_sd[pfn_w_key]   # handled manually; skip in load_state_dict
+
+            # ── Clamp low PFN BN running_var ─────────────────────────────────
+            # The KITTI checkpoint has 56 BN channels with running_var < 0.05
+            # (checkpoint artifact from training convergence). With var < 0.05,
+            # the effective BN scale = gamma / sqrt(var + eps) can exceed 5×,
+            # causing PFN output to explode to 100+ and saturating downstream BN.
+            # 
+            # Distribution (from 64 channels):
+            #   var < 1e-4:  12 channels (dead neurons)
+            #   var < 0.01:  40 channels (low)
+            #   var < 0.05:  56 channels (still low)
+            #   var ≥ 0.05:   8 channels (healthy)
+            #   
+            # Fix: clamp running_var to a minimum of 0.05 so the effective scale
+            # never exceeds ~2×, and downstream layers never saturate.
+            BN_VAR_MIN = 0.05
+            pfn_bn_var_key = 'pfn.layers.1.running_var'
+            if pfn_bn_var_key in new_sd:
+                raw_var = new_sd[pfn_bn_var_key]
+                n_clamped = (raw_var < BN_VAR_MIN).sum().item()
+                if n_clamped > 0:
+                    new_sd[pfn_bn_var_key] = raw_var.clamp(min=BN_VAR_MIN)
+                    print(f'  [PointPillars] clamped {n_clamped} PFN BN channels '
+                          f'with running_var < {BN_VAR_MIN} (checkpoint artifact)')
+
+            # ── Clamp ALL BatchNorm running_var across backbone and neck ────
+            # The checkpoint has widespread low-variance BN channels:
+            #   Backbone block 1: 4 channels with var < 0.01
+            #   Backbone block 2: 3 channels with var < 0.01
+            #   Neck deblock 0:  30 channels with var < 0.01 (min=2e-5!)
+            #   Neck deblock 1:  14 channels with var < 0.01
+            #   Neck deblock 2: 108 channels with var < 0.01 (min=1e-4!)
+            # This causes gradual re-saturation of activations through the stack.
+            # Clamp all running_var to ensure no BN layer ever amplifies by > 2×.
+            # 
+            # NOTE: This aggressive clamping (threshold=0.05) is needed for the model
+            # to produce any detections (loss of threshold reduces detections to 0).
+            # However, it creates hallucinations on LiDAR-empty regions (e.g., glass).
+            # Solution: Filter detections post-hoc based on LiDAR occupancy (see detect()).
+            total_bn_clamped = 0
+            for key in list(new_sd.keys()):
+                if 'running_var' in key:
+                    var = new_sd[key]
+                    n = (var < BN_VAR_MIN).sum().item()
+                    if n > 0:
+                        new_sd[key] = var.clamp(min=BN_VAR_MIN)
+                        total_bn_clamped += n
+            if total_bn_clamped > 40:  # Only report if we found backbone/neck issues
+                print(f'  [PointPillars] additionally clamped {total_bn_clamped} '
+                      f'backbone/neck BN channels (prevented re-saturation)')
 
             missing, unexpected = self.load_state_dict(new_sd, strict=False)
             # pfn.layers.0.weight was handled manually above, so it will always
@@ -695,11 +816,14 @@ def build_pointpillars(painted: bool = True,
     """
     Build a PointPillars model.
 
-    painted=True  → in_channels=8  (x,y,z,intensity,ring + 3 painting scores)
-    painted=False → in_channels=5  (x,y,z,intensity,ring — matches pretrained checkpoint)
+    painted=True  → in_channels=7  (x,y,z,intensity + 3 painting scores)
+    painted=False → in_channels=4  (x,y,z,intensity — exact match to pretrained checkpoint)
 
-    The pretrained KITTI checkpoint has PFN linear weight (64,10) = 5 base + 5 aug.
-    Our sensor is a 128-ring LiDAR; ring is normalised to [0,1] before feeding.
+    The pretrained KITTI checkpoint has PFN linear weight (64,10):
+      4 base + 3 cluster offsets (dx_c,dy_c,dz_c) + 3 voxel-centre offsets (dx_p,dy_p,dz_p) = 10.
+      (with_distance=False — no range channel — matching mmdet3d KITTI config)
+    The forward method always assembles the 10-channel tensor; in_channels only
+    controls how many painting score columns are appended past the first 4.
 
     z range is extended to [-3, 3] vs the KITTI default of [-3, 1] to handle
     sensors mounted lower than the KITTI setup (1.73m above ground). Since
@@ -707,7 +831,7 @@ def build_pointpillars(painted: bool = True,
     points are included — not the BEV grid size or any weight shapes.
     """
     cfg = PointPillarsConfig(
-        in_channels=8 if painted else 5,
+        in_channels=7 if painted else 4,
         score_threshold=score_thr,
         z_max=3.0,
     )
@@ -721,9 +845,12 @@ def build_pointpillars(painted: bool = True,
 def paint_point_cloud(points_xyz:  np.ndarray,
                       score_maps:  dict,
                       projector,
-                      image_shape: tuple) -> np.ndarray:
+                      image_shape: tuple,
+                      yolo_results: list = None,
+                      depth_window: float = 3.0) -> np.ndarray:
     """
-    Attach per-point semantic scores from YOLO score maps.
+    Attach per-point semantic scores from YOLO score maps or results,
+    optionally filtering out background points using instance-level depth consistency.
 
     Parameters
     ----------
@@ -735,6 +862,9 @@ def paint_point_cloud(points_xyz:  np.ndarray,
                   1=cyclist→ score_cyc
     projector   : KittiLidarToImageProjector
     image_shape : (H, W)
+    yolo_results: list of Ultralytics YOLO Results (optional)
+    depth_window: float (default: 3.0 meters)
+                  The window size around the median depth of an instance to consider points valid.
 
     Returns
     -------
@@ -769,13 +899,55 @@ def paint_point_cloud(points_xyz:  np.ndarray,
         u_int = np.clip(uv[in_img, 0].astype(int), 0, w - 1)
         v_int = np.clip(uv[in_img, 1].astype(int), 0, h - 1)
         img_idx = np.where(front)[0][in_img]
+        pt_depths = depths[in_img]
 
-        if 0 in score_maps:
-            scores_ped[img_idx] = score_maps[0][v_int, u_int]
-        if 2 in score_maps:
-            scores_car[img_idx] = score_maps[2][v_int, u_int]
-        if 1 in score_maps:
-            scores_cyc[img_idx] = score_maps[1][v_int, u_int]
+        # Case A: Instance-level depth-consistent painting (resolves background bleeding)
+        if yolo_results is not None and len(yolo_results) > 0:
+            import cv2
+            for result in yolo_results:
+                if result.masks is None:
+                    continue
+                masks   = result.masks.data.cpu().numpy()
+                classes = result.boxes.cls.cpu().numpy().astype(int)
+                confs   = result.boxes.conf.cpu().numpy()
+
+                for mask, cls_id, conf in zip(masks, classes, confs):
+                    if cls_id not in [0, 1, 2]:  # COCO: person=0, cyclist=1, car=2
+                        continue
+                    # Resize mask to original image size
+                    mask_resized = cv2.resize(mask, (w, h), interpolation=cv2.INTER_LINEAR)
+                    inside_mask = mask_resized[v_int, u_int] > 0.5
+                    if not inside_mask.any():
+                        continue
+
+                    # Compute median depth of points projecting inside this mask
+                    med_depth = np.median(pt_depths[inside_mask])
+
+                    # Keep only points within depth window of the median depth
+                    depth_mask = (pt_depths >= med_depth - depth_window) & (pt_depths <= med_depth + depth_window)
+                    valid_paint = inside_mask & depth_mask
+
+                    # Paint the valid points
+                    valid_idx = img_idx[valid_paint]
+                    valid_u = u_int[valid_paint]
+                    valid_v = v_int[valid_paint]
+                    scores = mask_resized[valid_v, valid_u] * float(conf)
+
+                    if cls_id == 0:
+                        scores_ped[valid_idx] = np.maximum(scores_ped[valid_idx], scores)
+                    elif cls_id == 2:
+                        scores_car[valid_idx] = np.maximum(scores_car[valid_idx], scores)
+                    elif cls_id == 1:
+                        scores_cyc[valid_idx] = np.maximum(scores_cyc[valid_idx], scores)
+
+        # Case B: Fallback to standard projection-only painting (when yolo_results is None)
+        else:
+            if 0 in score_maps:
+                scores_ped[img_idx] = score_maps[0][v_int, u_int]
+            if 2 in score_maps:
+                scores_car[img_idx] = score_maps[2][v_int, u_int]
+            if 1 in score_maps:
+                scores_cyc[img_idx] = score_maps[1][v_int, u_int]
 
     return np.stack([xyz[:, 0], xyz[:, 1], xyz[:, 2],
                      intensity, ring, scores_ped, scores_car, scores_cyc],
@@ -881,3 +1053,85 @@ def draw_bev(boxes:  np.ndarray,
         cv2.putText(bev, f'{name} {score:.2f}', (pu+5, pv-4),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.35, color, 1)
     return bev
+
+
+def filter_point_cloud_by_yolo(
+    painted_cloud: np.ndarray,
+    cfg: PointPillarsConfig,
+    filter_thr: float = 0.1,
+    dilate_radius: int = 15
+) -> np.ndarray:
+    """
+    Filter point cloud to only keep points in pillars (and their neighbors)
+    that contain at least one point with a YOLO painting score > filter_thr.
+
+    This eliminates irrelevant background/noise points (such as building reflections)
+    while keeping the objects of interest and their surrounding geometric context.
+
+    Parameters
+    ----------
+    painted_cloud : (N, 8) float32 array
+        [x, y, z, intensity, ring, score_ped, score_car, score_cyc]
+    cfg : PointPillarsConfig
+        PointPillars configuration (used for voxel sizes and grid bounds)
+    filter_thr : float
+        YOLO score threshold above which a point is considered classified/painted
+    dilate_radius : int
+        Dilation radius (in pillars) around active pillars to keep context
+
+    Returns
+    -------
+    filtered_cloud : (M, 8) float32 array
+    """
+    if len(painted_cloud) == 0:
+        return painted_cloud
+
+    # Get grid bounds and voxel sizes
+    x_min, x_max = cfg.x_min, cfg.x_max
+    y_min, y_max = cfg.y_min, cfg.y_max
+    voxel_x, voxel_y = cfg.voxel_x, cfg.voxel_y
+    nx, ny = cfg.nx, cfg.ny
+
+    # Extract x and y coordinates
+    xs = painted_cloud[:, 0]
+    ys = painted_cloud[:, 1]
+
+    # Compute pillar grid indices
+    ix = ((xs - x_min) / voxel_x).astype(np.int32)
+    iy = ((ys - y_min) / voxel_y).astype(np.int32)
+
+    # Mask of points within grid limits
+    grid_mask = (ix >= 0) & (ix < nx) & (iy >= 0) & (iy < ny)
+
+    # Points with YOLO score > threshold
+    max_scores = painted_cloud[:, 5:].max(axis=1)
+    painted_point_mask = (max_scores > filter_thr) & grid_mask
+
+    # Find active pillars
+    active_iy = iy[painted_point_mask]
+    active_ix = ix[painted_point_mask]
+
+    if len(active_iy) == 0:
+        # No points classified/painted; return empty cloud
+        return np.zeros((0, painted_cloud.shape[1]), dtype=painted_cloud.dtype)
+
+    # Create active pillar occupancy grid
+    active_grid = np.zeros((ny, nx), dtype=np.uint8)
+    active_grid[active_iy, active_ix] = 1
+
+    # Dilate active grid if radius > 0
+    if dilate_radius > 0:
+        import cv2
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2*dilate_radius+1, 2*dilate_radius+1))
+        active_grid = cv2.dilate(active_grid, kernel)
+
+    # Filter points: keep those falling into active/dilated pillars
+    keep_mask = np.zeros(len(painted_cloud), dtype=bool)
+    valid_indices = np.where(grid_mask)[0]
+    in_grid_iy = iy[valid_indices]
+    in_grid_ix = ix[valid_indices]
+
+    keep_mask[valid_indices] = (active_grid[in_grid_iy, in_grid_ix] > 0)
+
+    return painted_cloud[keep_mask]
+

@@ -119,10 +119,42 @@ Port `9090` is automatically forwarded by the devcontainer — no extra configur
 
 ## Optional — Run the pipeline isolation test (no ROS needed)
 
-Runs the full pipeline on one bag frame and saves 4 verification images to `/workspace/isolation_output/`:
+Runs the full pipeline (YOLO → PointPainting → PointPillars) on one bag frame and saves
+verification images to `/workspace/AI-Based-Data-Fusion/isolation_output/`.
 
 ```bash
+# Minimal run — random frame, no 3-D detection checkpoint
 python3 /workspace/test_pipeline_isolation.py
+
+# With PointPillars checkpoint (recommended)
+python3 /workspace/test_pipeline_isolation.py \
+    --pp-checkpoint /workspace/pointpillars_kitti.pth
+
+# Reproduce a specific frame (use the seed printed at the end of any run)
+python3 /workspace/test_pipeline_isolation.py \
+    --seed 42 \
+    --pp-checkpoint /workspace/pointpillars_kitti.pth
+
+# Lower score threshold to surface more detections
+python3 /workspace/test_pipeline_isolation.py \
+    --pp-checkpoint /workspace/pointpillars_kitti.pth \
+    --pp-score-thr 0.10
+
+# Tune Z-axis alignment (sensor mounted higher/lower than KITTI baseline)
+python3 /workspace/test_pipeline_isolation.py \
+    --pp-checkpoint /workspace/pointpillars_kitti.pth \
+    --z-offset -0.25
+
+# Fix intensity scale — this Velodyne outputs raw values up to ~1910 (not 0-255).
+# Use p95 of the raw distribution (~1072) to avoid outlier compression.
+python3 /workspace/test_pipeline_isolation.py \
+    --pp-checkpoint /workspace/pointpillars_kitti.pth \
+    --intensity-max 1072.0
+
+# Correct a heading misalignment (radians)
+python3 /workspace/test_pipeline_isolation.py \
+    --pp-checkpoint /workspace/pointpillars_kitti.pth \
+    --yaw-offset 0.05
 ```
 
 Output images:
@@ -131,9 +163,13 @@ isolation_output/01_raw_image.jpg          ← original camera frame
 isolation_output/02_yolo_mask.jpg          ← YOLO class mask (colour per class)
 isolation_output/03_overlay.jpg            ← mask blended on image
 isolation_output/04_lidar_projected.jpg    ← LiDAR points on image, coloured by class
+isolation_output/05_painted_scores.jpg     ← per-point painting score heat map
+isolation_output/06_detections.jpg         ← camera image with projected 3-D boxes
+isolation_output/07_bev.jpg                ← bird's-eye view with box footprints
 ```
 
-If `04_lidar_projected.jpg` shows green dots on the car and red dots on the person, the full pipeline is correct.
+If `04_lidar_projected.jpg` shows green dots on cars and red dots on people, painting is correct.
+If `06_detections.jpg` / `07_bev.jpg` show boxes, PointPillars is working end-to-end.
 
 ---
 

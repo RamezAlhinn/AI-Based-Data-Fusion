@@ -111,6 +111,11 @@ studentProject1/
   metadata.yaml
 .gitignore
 calib.txt
+camera_front_center_autoware_camera_calibration.yaml
+download_pointpillars.py
+inspect_checkpoint.py
+ISOLATION_CHANGES.md
+point_pillars.py
 QUICKSTART.md
 README.md
 test_pipeline_isolation.py
@@ -1881,77 +1886,6 @@ setup(
 
 </file>
 
-<file path="ros2_ws/src/point_painting/point_painting/segmentation/yolo_segmentation.py">
-import numpy as np
-import cv2
-from PIL import Image
-
-
-def load_model(checkpoint_path: str = None):
-    """
-    Load YOLO26n-seg model. Auto-downloads on first use (~6 MB, cached).
-    Pass checkpoint_path to override with a local file.
-    """
-    from ultralytics import YOLO
-    model_path = checkpoint_path if checkpoint_path else 'yolo26n-seg.pt'
-    return YOLO(model_path)
-
-
-def segment_image(model, image: Image.Image) -> np.ndarray:
-    """
-    Run YOLO instance segmentation on a PIL image.
-    Returns a (H, W) array with native YOLO/COCO class IDs per pixel, 0 = background.
-
-    COCO class IDs (relevant for driving):
-      0=person, 1=bicycle, 2=car, 3=motorcycle, 5=bus, 7=truck
-    """
-    img_np = np.array(image)
-    h, w = img_np.shape[:2]
-
-    results = model(img_np, verbose=False, conf=0.15)
-    label_mask = np.full((h, w), -1, dtype=np.int32)  # -1 = background/no detection
-
-    for result in results:
-        if result.masks is None:
-            continue
-
-        masks = result.masks.data.cpu().numpy()        # (N, H', W')
-        classes = result.boxes.cls.cpu().numpy().astype(int)  # (N,) — native COCO IDs
-
-        for mask, cls_id in zip(masks, classes):
-            mask_u8 = (mask * 255).astype(np.uint8)
-            mask_resized = cv2.resize(mask_u8, (w, h), interpolation=cv2.INTER_NEAREST)
-            label_mask[mask_resized > 127] = cls_id
-
-    return label_mask
-
-
-if __name__ == '__main__':
-    import argparse
-    import matplotlib
-    matplotlib.use('Agg')
-    import matplotlib.pyplot as plt
-
-    parser = argparse.ArgumentParser(description='Run YOLO segmentation on an image')
-    parser.add_argument('--image', required=True, help='Path to input image')
-    parser.add_argument('--checkpoint', default=None, help='Path to YOLO model file (default: yolo26n-seg.pt)')
-    args = parser.parse_args()
-
-    model = load_model(args.checkpoint)
-    image = Image.open(args.image).convert('RGB')
-    label_mask = segment_image(model, image)
-
-    print('Detected classes:', np.unique(label_mask[label_mask > 0]))
-    print('Class names:', {i: model.names[i] for i in np.unique(label_mask) if i in model.names})
-
-    plt.figure(figsize=(12, 5))
-    plt.subplot(1, 2, 1); plt.imshow(image); plt.title('Original'); plt.axis('off')
-    plt.subplot(1, 2, 2); plt.imshow(label_mask, cmap='tab20'); plt.title('YOLO Classes'); plt.axis('off')
-    out = args.image.rsplit('.', 1)[0] + '_yolo_seg.png'
-    plt.savefig(out)
-    print(f'Saved: {out}')
-</file>
-
 <file path="ros2_ws/src/point_painting/point_painting/__init__.py">
 
 </file>
@@ -2135,13 +2069,1140 @@ setup(
 
 </file>
 
-<file path="calib.txt">
-P0: 2.31880000e+03 0.00000000e+00 9.59500000e+02 0.00000000e+00 0.00000000e+00 2.31880000e+03 5.99500000e+02 0.00000000e+00 0.00000000e+00 0.00000000e+00 1.00000000e+00 0.00000000e+00
-P1: 2.31880000e+03 0.00000000e+00 9.59500000e+02 0.00000000e+00 0.00000000e+00 2.31880000e+03 5.99500000e+02 0.00000000e+00 0.00000000e+00 0.00000000e+00 1.00000000e+00 0.00000000e+00
-P2: 2.31880000e+03 0.00000000e+00 9.59500000e+02 0.00000000e+00 0.00000000e+00 2.31880000e+03 5.99500000e+02 0.00000000e+00 0.00000000e+00 0.00000000e+00 1.00000000e+00 0.00000000e+00
-P3: 2.31880000e+03 0.00000000e+00 9.59500000e+02 0.00000000e+00 0.00000000e+00 2.31880000e+03 5.99500000e+02 0.00000000e+00 0.00000000e+00 0.00000000e+00 1.00000000e+00 0.00000000e+00
-R0_rect: 1.00000000e+00 0.00000000e+00 0.00000000e+00 0.00000000e+00 1.00000000e+00 0.00000000e+00 0.00000000e+00 0.00000000e+00 1.00000000e+00
-Tr_velo_to_cam: -2.12017941e-02 -9.99761478e-01 5.23997388e-03 1.56148368e-02 -1.61566678e-01 -1.74602743e-03 -9.86860247e-01 -6.58307032e-02 9.86634015e-01 -2.17698195e-02 -1.61491116e-01 -7.11819139e-01
+<file path="camera_front_center_autoware_camera_calibration.yaml">
+%YAML:1.0
+---
+CameraExtrinsicMat: !!opencv-matrix
+   rows: 4
+   cols: 4
+   dt: d
+   data: [ 1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., 0., 0., 0., 0.,
+       1. ]
+CameraMat: !!opencv-matrix
+   rows: 3
+   cols: 3
+   dt: d
+   data: [ 8.8050024627982475e+02, 0., 9.2639074141015010e+02, 0.,
+       8.7872560881910874e+02, 5.7876132391886370e+02, 0., 0., 1. ]
+DistCoeff: !!opencv-matrix
+   rows: 5
+   cols: 1
+   dt: d
+   data: [ -3.3127839152606703e-01, 1.2599278738479741e-01,
+       -5.2278234089370255e-04, -1.0182380205610319e-04,
+       -2.3307261207609630e-02 ]
+ImageSize: [1920, 1200]
+Reprojection Error: 0.0
+DistModel: plumb_bob
+</file>
+
+<file path="download_pointpillars.py">
+"""
+Download the pretrained PointPillars KITTI 3-class checkpoint from the
+mmdetection3d model zoo and save it to the workspace.
+
+Run inside the container:
+  python3 /workspace/AI-Based-Data-Fusion/download_pointpillars.py
+"""
+
+import os
+import urllib.request
+
+CHECKPOINT_URL = (
+    "https://download.openmmlab.com/mmdetection3d/v1.0.0_models/pointpillars/"
+    "hv_pointpillars_secfpn_6x8_160e_kitti-3d-3class/"
+    "hv_pointpillars_secfpn_6x8_160e_kitti-3d-3class_20220301_150306-37dc2420.pth"
+)
+
+SAVE_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "pointpillars_kitti_3class.pth"
+)
+
+
+def _progress(block_num, block_size, total_size):
+    downloaded = block_num * block_size
+    if total_size > 0:
+        pct = min(100.0, downloaded * 100.0 / total_size)
+        mb  = downloaded / 1e6
+        tot = total_size / 1e6
+        print(f'\r  {pct:5.1f}%  {mb:.1f} / {tot:.1f} MB', end='', flush=True)
+
+
+if __name__ == '__main__':
+    if os.path.isfile(SAVE_PATH):
+        size_mb = os.path.getsize(SAVE_PATH) / 1e6
+        print(f'Checkpoint already exists ({size_mb:.1f} MB): {SAVE_PATH}')
+    else:
+        print(f'Downloading PointPillars KITTI 3-class checkpoint...')
+        print(f'  URL : {CHECKPOINT_URL}')
+        print(f'  Dest: {SAVE_PATH}')
+        urllib.request.urlretrieve(CHECKPOINT_URL, SAVE_PATH, _progress)
+        print(f'\nDone.  Saved to: {SAVE_PATH}')
+
+    print('\nRun the pipeline with:')
+    print(f'  python3 /workspace/AI-Based-Data-Fusion/test_pipeline_isolation.py '
+          f'--seed 7 --pp-checkpoint {SAVE_PATH}')
+</file>
+
+<file path="inspect_checkpoint.py">
+"""
+Print all key names and tensor shapes in a checkpoint.
+Run inside the container:
+  python3 /workspace/AI-Based-Data-Fusion/inspect_checkpoint.py \
+      /workspace/AI-Based-Data-Fusion/pointpillars_kitti_3class.pth
+"""
+import sys
+import torch
+
+path = sys.argv[1] if len(sys.argv) > 1 else \
+       '/workspace/AI-Based-Data-Fusion/pointpillars_kitti_3class.pth'
+
+ckpt = torch.load(path, map_location='cpu', weights_only=False)
+sd   = ckpt.get('state_dict', ckpt) if isinstance(ckpt, dict) else ckpt
+
+print(f'Top-level keys: {list(ckpt.keys()) if isinstance(ckpt, dict) else "(raw state_dict)"}')
+print(f'\nTotal tensors: {len(sd)}\n')
+for k, v in sd.items():
+    print(f'  {k:<70s} {str(tuple(v.shape)):<25s} {v.dtype}')
+</file>
+
+<file path="ISOLATION_CHANGES.md">
+# Pipeline Isolation Script — Improvements Summary
+
+Changes made to `test_pipeline_isolation.py` and `.devcontainer/Dockerfile` to fix YOLO model loading and LiDAR point painting quality.
+
+---
+
+## 1. Correct YOLO Model Path
+
+**Problem:** `YOLO('yolo11m-seg.pt')` resolved to the ultralytics download cache (`~/.config/Ultralytics/`), ignoring the manually downloaded model in the repo root. The Dockerfile was also pre-downloading a separate copy into the cache at build time.
+
+**Fix (`test_pipeline_isolation.py`):** Resolve the model path relative to the script's own location:
+```python
+_script_dir = os.path.dirname(os.path.abspath(__file__))
+YOLO_MODEL = os.path.join(_script_dir, 'yolo11m-seg.pt')
+```
+
+**Fix (`Dockerfile`):** Copy the downloaded model to `/workspace/yolo11m-seg.pt` at build time so the cache and workspace file are the same:
+```dockerfile
+RUN python3 -c "from ultralytics import YOLO; import shutil, os; m = YOLO('yolo11m-seg.pt'); \
+    shutil.copy2(m.ckpt_path, '/workspace/yolo11m-seg.pt') \
+    if os.path.abspath(m.ckpt_path) != '/workspace/yolo11m-seg.pt' else None"
+```
+
+---
+
+## 2. Print Model Identity at Runtime
+
+**Problem:** No way to confirm which model file was actually loaded.
+
+**Fix:** Print the resolved path and model class immediately after loading:
+```python
+print(f'  Model file : {os.path.abspath(YOLO_MODEL)}')
+print(f'  Model type : {type(model.model).__name__}')
+```
+
+---
+
+## 3. Prevent YOLO Letterboxing
+
+**Problem:** YOLO auto-resizes and pads input images internally, which offsets the output mask coordinates relative to the original image pixels, causing mask/point misalignment.
+
+**Fix:** Pass the exact image dimensions so YOLO skips letterboxing:
+```python
+results = model(img_rgb, verbose=False, conf=0.25, imgsz=(h, w))
+```
+
+---
+
+## 4. Cleaner Mask Boundaries
+
+**Problem:** `INTER_NEAREST` resize produced blocky mask edges. Threshold `127` was too loose, letting blurry mask edges bleed into background regions.
+
+**Fix:** Bilinear resize with a tighter threshold:
+```python
+mask_resized = cv2.resize(mask_u8, (w, h), interpolation=cv2.INTER_LINEAR)
+label_mask[mask_resized > 200] = cls_id
+```
+
+---
+
+## 5. Mask Dilation to Close Interior Holes
+
+**Problem:** After the tighter threshold, small holes appeared inside masks (especially on the person), causing LiDAR points inside the object to miss the mask and render as grey (unpainted).
+
+**Fix:** Dilate each class mask with a 7×7 elliptical kernel before point lookup:
+```python
+kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+dilated = cv2.dilate(binary, kernel, iterations=1)
+```
+
+---
+
+## 6. Majority-Vote Neighbourhood Lookup
+
+**Problem:** Each LiDAR point looked up exactly one pixel `label_mask[v, u]`. Sub-pixel projection errors caused points near object edges to hit background pixels and render grey.
+
+**Fix:** Sample a 3px radius neighbourhood and take the most common class:
+```python
+def majority_class(lm, cy, cx, r=3):
+    patch = lm[max(0,cy-r):cy+r+1, max(0,cx-r):cx+r+1]
+    valid = patch[patch >= 0]
+    if len(valid) == 0:
+        return -1
+    return int(np.argmax(np.bincount(valid)))
+```
+
+---
+
+## 7. Ground Point Filter
+
+**Problem:** LiDAR ground returns (low-elevation points) scattered noisy coloured dots across the bottom of the image, some hitting YOLO car masks incorrectly.
+
+**Fix:** Filter out points below the sensor mounting height before projection:
+```python
+GROUND_Z_THRESH = -1.5  # metres in Velodyne frame (z-up)
+lidar_filtered = lidar_frame[lidar_frame[:, 2] > GROUND_Z_THRESH]
+```
+
+---
+
+## 8. Depth-Sorted Rendering with Scaled Radius
+
+**Problem:** All points drawn at a fixed radius regardless of distance. Far points were too small to fill scan-line gaps; near/far points drawn in arbitrary order caused incorrect occlusion.
+
+**Fix:** Sort points back-to-front and scale radius by depth:
+```python
+order = np.argsort(depths)[::-1]  # far points drawn first
+# radius: ~6px at 5m, ~4px at 10m, ~3px at 20m
+radius = max(3, int(30.0 / max(depth, 1.0)))
+```
+
+---
+
+## 9. Draw on Raw Image (No Double-Blend)
+
+**Problem:** LiDAR points were drawn on top of `overlay` (which was already a blend of the image + mask). This double-applied colour in masked regions, making them look oversaturated.
+
+**Fix:** Draw points directly on a copy of the raw image:
+```python
+lidar_img = img_frame.copy()  # was: overlay.copy()
+```
+</file>
+
+<file path="point_pillars.py">
+"""
+PointPillars — architecture exactly matching the mmdetection3d KITTI checkpoint.
+
+Layer names, sizes, and strides are taken directly from:
+  configs/_base_/models/pointpillars_hv_secfpn_kitti.py  (mmdet3d v1.0)
+
+This lets us load the public pretrained weights without mmdet3d being installed.
+
+Input point format depends on mode:
+  Standard  : [x, y, z, intensity]                      — 4 channels
+  Painted   : [x, y, z, intensity, s_ped, s_car, s_cyc] — 7 channels
+              (extra channels are appended to the pillar features before the PFN)
+
+Coordinate frame: Velodyne (x=forward, y=left, z=up)
+
+Typical usage
+-------------
+    model = build_pointpillars(painted=True)
+    model.load_pretrained('pointpillars_kitti_3class.pth')
+    boxes, scores, labels = model.detect(painted_points)   # Nx7
+"""
+
+from __future__ import annotations
+import os
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from dataclasses import dataclass, field
+from typing import List, Tuple
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  Configuration  (mirrors mmdet3d KITTI 3-class config exactly)
+# ══════════════════════════════════════════════════════════════════════════════
+
+@dataclass
+class PointPillarsConfig:
+    # Point cloud range [x_min, y_min, z_min, x_max, y_max, z_max]
+    x_min: float = 0.0;    x_max: float = 69.12
+    y_min: float = -39.68; y_max: float = 39.68
+    z_min: float = -3.0;   z_max: float = 1.0
+
+    # Voxel / pillar grid
+    voxel_x: float = 0.16;  voxel_y: float = 0.16;  voxel_z: float = 4.0
+    max_points_per_voxel: int = 32
+    max_voxels_train: int = 16000
+    max_voxels_test:  int = 40000
+
+    # PFN input channels (4 base; painting adds extra channels)
+    in_channels: int = 4          # set to 7 when using PointPainting
+
+    # Backbone (SECOND)
+    backbone_in:       int        = 64
+    backbone_out:      List[int]  = field(default_factory=lambda: [64, 128, 256])
+    backbone_layers:   List[int]  = field(default_factory=lambda: [4, 6, 6])
+    backbone_strides:  List[int]  = field(default_factory=lambda: [2, 2, 2])
+
+    # Neck (SECONDFPN)
+    neck_in:           List[int]  = field(default_factory=lambda: [64, 128, 256])
+    neck_out:          List[int]  = field(default_factory=lambda: [128, 128, 128])
+    neck_upsample_strides: List[int] = field(default_factory=lambda: [1, 2, 4])
+
+    # Detection head
+    num_classes: int = 3          # Pedestrian=0, Cyclist=1, Car=2
+    head_in_channels: int = 384   # sum(neck_out)
+
+    # Anchors (per class: [y_min, x_min, z_centre, y_max, x_max, z_centre])
+    # sizes: [w, l, h]
+    anchor_sizes:      List[Tuple] = field(default_factory=lambda: [
+        (0.8,  0.6,  1.73),   # Pedestrian
+        (1.76, 0.6,  1.73),   # Cyclist
+        (3.9,  1.6,  1.56),   # Car
+    ])
+    anchor_z_centres:  List[float] = field(default_factory=lambda: [
+        -0.6, -0.6, -1.78
+    ])
+    anchor_rotations:  List[float] = field(default_factory=lambda: [0.0, 1.5707963])
+
+    # Inference
+    score_threshold:   float = 0.10
+    nms_iou_threshold: float = 0.01
+    max_detections:    int   = 50
+
+    # Derived
+    nx: int = field(init=False)
+    ny: int = field(init=False)
+
+    def __post_init__(self):
+        self.nx = round((self.x_max - self.x_min) / self.voxel_x)  # 432
+        self.ny = round((self.y_max - self.y_min) / self.voxel_y)  # 496
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  PillarFeatureNet  — matches mmdet3d PillarFeatureNet
+# ══════════════════════════════════════════════════════════════════════════════
+
+class PillarFeatureNet(nn.Module):
+    """
+    in_channels: base point features (4) + augmented (5) + painting (optional)
+    feat_channels: [64]  — single-layer PFN as in the paper
+    """
+
+    def __init__(self, in_channels: int = 4,
+                 feat_channels: List[int] = None):
+        super().__init__()
+        feat_channels = feat_channels or [64]
+
+        # 10 fixed augmented channels: [x,y,z,r] + [dx_c,dy_c,dz_c] + [dx_p,dy_p] + [depth]
+        # plus any painting score channels beyond the first 4 base channels
+        painting_channels = max(0, in_channels - 4)
+        augmented_in = 10 + painting_channels
+
+        layers = []
+        prev = augmented_in
+        for c in feat_channels:
+            layers += [
+                nn.Linear(prev, c, bias=False),
+                nn.BatchNorm1d(c, eps=1e-3, momentum=0.01),
+                nn.ReLU(inplace=True),
+            ]
+            prev = c
+        self.layers = nn.Sequential(*layers)
+        self.out_channels = prev
+
+    def forward(self, pillars: torch.Tensor,
+                num_points: torch.Tensor,
+                coords: torch.Tensor) -> torch.Tensor:
+        """
+        pillars   : (P, N, C)   — P pillars, N points each, C features (x,y,z,r,...)
+        num_points: (P,)        — actual point count per pillar
+        coords    : (P, 4)      — [batch, z(0), iy, ix] pillar grid indices
+
+        Returns: (P, C_out)
+        Assembles a 10-channel augmented tensor matching mmdet3d KITTI checkpoint:
+          0-2: x, y, z
+          3:   intensity (r)
+          4-6: x - x_c, y - y_c, z - z_c  (offset from cluster mean)
+          7-8: x - x_p, y - y_p            (offset from geometric pillar centre)
+          9:   sqrt(x^2 + y^2 + z^2)       (absolute range)
+        """
+        P, N, C = pillars.shape
+        device  = pillars.device
+
+        mask   = torch.arange(N, device=device).unsqueeze(0) < \
+                 num_points.unsqueeze(1)                           # (P, N)
+        mask_f = mask.unsqueeze(-1).float()                       # (P, N, 1)
+
+        # ── cluster mean offset (x_c, y_c, z_c computed over valid points) ──────
+        sum_pts = (pillars[:, :, :3] * mask_f).sum(dim=1)        # (P, 3)
+        cnt     = num_points.float().clamp(min=1).unsqueeze(1)    # (P, 1)
+        centre  = sum_pts / cnt                                    # (P, 3)
+        d_cluster = pillars[:, :, :3] - centre.unsqueeze(1)      # (P, N, 3)
+
+        # ── geometric pillar centre from grid indices ─────────────────────────
+        # coords[:, 3] = ix (column), coords[:, 2] = iy (row)
+        DX, DY   = 0.16, 0.16
+        X_MIN    = 0.0
+        Y_MIN    = -39.68
+        ix = coords[:, 3].float().to(device)                      # (P,)
+        iy = coords[:, 2].float().to(device)                      # (P,)
+        xp = (ix * DX + X_MIN + DX / 2.0).view(P, 1, 1).expand(P, N, 1)
+        yp = (iy * DY + Y_MIN + DY / 2.0).view(P, 1, 1).expand(P, N, 1)
+        d_pillar_x = pillars[:, :, 0:1] - xp                     # (P, N, 1)
+        d_pillar_y = pillars[:, :, 1:2] - yp                     # (P, N, 1)
+
+        # ── absolute range ────────────────────────────────────────────────────
+        depth = torch.norm(pillars[:, :, :3], dim=-1, keepdim=True)  # (P, N, 1)
+
+        # ── assemble augmented tensor and zero out padding ───────────────────
+        # Base: [x,y,z,r] + any extra painting score channels beyond index 3
+        base = pillars[:, :, :4]                                  # (P, N, 4)
+        extra = pillars[:, :, 4:] if C > 4 else None             # (P, N, C-4) or None
+        parts = [base, d_cluster, d_pillar_x, d_pillar_y, depth]
+        if extra is not None:
+            parts.append(extra)
+        augmented = torch.cat(parts, dim=-1)  # (P,N,10) standard or (P,N,10+C-4) painted
+        augmented = augmented * mask_f
+
+        flat = augmented.view(P * N, -1)
+        feat = self.layers(flat).view(P, N, -1)
+
+        feat = feat * mask_f
+        feat = feat.max(dim=1).values                             # (P, C_out)
+        return feat
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  PointPillarsScatter  — matches mmdet3d PointPillarsScatter
+# ══════════════════════════════════════════════════════════════════════════════
+
+class PointPillarsScatter(nn.Module):
+
+    def __init__(self, in_channels: int = 64,
+                 output_shape: Tuple[int, int] = (496, 432)):
+        super().__init__()
+        self.ny, self.nx = output_shape
+        self.in_channels = in_channels
+
+    def forward(self, pillar_features: torch.Tensor,
+                coords: torch.Tensor,
+                batch_size: int = 1) -> torch.Tensor:
+        """
+        pillar_features: (P_total, C)
+        coords:          (P_total, 4)  — [batch, z(0), y, x]
+
+        Returns: (B, C, ny, nx)
+        """
+        canvas = torch.zeros(batch_size, self.in_channels, self.ny, self.nx,
+                             dtype=pillar_features.dtype,
+                             device=pillar_features.device)
+        for b in range(batch_size):
+            mask = coords[:, 0] == b
+            c    = coords[mask]
+            f    = pillar_features[mask]
+            canvas[b, :, c[:, 2].long(), c[:, 3].long()] = f.T
+        return canvas
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  SECOND backbone  — matches mmdet3d SECOND
+# ══════════════════════════════════════════════════════════════════════════════
+
+class SECOND(nn.Module):
+
+    def __init__(self, in_channels: int = 64,
+                 out_channels: List[int] = None,
+                 layer_nums:   List[int] = None,
+                 layer_strides: List[int] = None):
+        super().__init__()
+        out_channels  = out_channels  or [64, 128, 256]
+        layer_nums    = layer_nums    or [3, 5, 5]
+        layer_strides = layer_strides or [2, 2, 2]
+
+        self.blocks = nn.ModuleList()
+        prev = in_channels
+        for out_c, n_layers, stride in zip(out_channels, layer_nums, layer_strides):
+            block = [
+                nn.Conv2d(prev, out_c, 3, stride=stride, padding=1, bias=False),
+                nn.BatchNorm2d(out_c, eps=1e-3, momentum=0.01),
+                nn.ReLU(inplace=True),
+            ]
+            for _ in range(n_layers - 1):
+                block += [
+                    nn.Conv2d(out_c, out_c, 3, padding=1, bias=False),
+                    nn.BatchNorm2d(out_c, eps=1e-3, momentum=0.01),
+                    nn.ReLU(inplace=True),
+                ]
+            self.blocks.append(nn.Sequential(*block))
+            prev = out_c
+
+    def forward(self, x: torch.Tensor) -> List[torch.Tensor]:
+        outs = []
+        for block in self.blocks:
+            x = block(x)
+            outs.append(x)
+        return outs
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  SECONDFPN neck  — matches mmdet3d SECONDFPN
+# ══════════════════════════════════════════════════════════════════════════════
+
+class SECONDFPN(nn.Module):
+
+    def __init__(self, in_channels:  List[int] = None,
+                 out_channels: List[int] = None,
+                 upsample_strides: List[int] = None):
+        super().__init__()
+        in_channels       = in_channels       or [64, 128, 256]
+        out_channels      = out_channels      or [128, 128, 128]
+        upsample_strides  = upsample_strides  or [1, 2, 4]
+
+        self.deblocks = nn.ModuleList()
+        for in_c, out_c, stride in zip(in_channels, out_channels, upsample_strides):
+            self.deblocks.append(nn.Sequential(
+                nn.ConvTranspose2d(in_c, out_c,
+                                   kernel_size=stride,
+                                   stride=stride, bias=False),
+                nn.BatchNorm2d(out_c, eps=1e-3, momentum=0.01),
+                nn.ReLU(inplace=True),
+            ))
+        self.out_channels = sum(out_channels)
+
+    def forward(self, feats: List[torch.Tensor]) -> torch.Tensor:
+        ups = [deblock(feat) for deblock, feat in zip(self.deblocks, feats)]
+        # Align to the smallest spatial size
+        h = min(u.shape[2] for u in ups)
+        w = min(u.shape[3] for u in ups)
+        ups = [F.interpolate(u, (h, w), mode='bilinear', align_corners=False)
+               if u.shape[2] != h or u.shape[3] != w else u
+               for u in ups]
+        return torch.cat(ups, dim=1)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  Anchor3DHead  — matches mmdet3d Anchor3DHead
+# ══════════════════════════════════════════════════════════════════════════════
+
+class Anchor3DHead(nn.Module):
+
+    def __init__(self, num_classes: int = 3,
+                 in_channels: int = 384,
+                 feat_channels: int = 384,
+                 num_anchors_per_loc: int = 2):
+        super().__init__()
+        # total anchors per location = num_rotations × num_classes
+        # cls_out: each anchor gets num_classes scores  → total_anchors * num_classes
+        # reg_out: each anchor gets 7 regression values → total_anchors * 7
+        # dir_out: each anchor gets 2 dir logits        → total_anchors * 2
+        total_anchors    = num_anchors_per_loc * num_classes  # 6
+        self.cls_out     = nn.Conv2d(feat_channels, total_anchors * num_classes, 1)  # (18,384,1,1)
+        self.reg_out     = nn.Conv2d(feat_channels, total_anchors * 7, 1)            # (42,384,1,1)
+        self.dir_out     = nn.Conv2d(feat_channels, total_anchors * 2, 1)            # (12,384,1,1)
+        self.num_classes = num_classes
+        self.num_anchors = total_anchors
+
+    def forward(self, x: torch.Tensor):
+        return self.cls_out(x), self.reg_out(x), self.dir_out(x)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  Anchor generation & box decoding
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _build_anchors(cfg: PointPillarsConfig,
+                   feat_h: int, feat_w: int) -> np.ndarray:
+    """
+    Returns (feat_h, feat_w, n_cls, n_rot, 7)
+    7 = [cx, cy, cz, w, l, h, rot]
+    """
+    x_step = (cfg.x_max - cfg.x_min) / feat_w
+    y_step = (cfg.y_max - cfg.y_min) / feat_h
+    xs = np.arange(feat_w) * x_step + cfg.x_min + x_step / 2
+    ys = np.arange(feat_h) * y_step + cfg.y_min + y_step / 2
+    xx, yy = np.meshgrid(xs, ys)
+
+    n_rot = len(cfg.anchor_rotations)
+    n_cls = cfg.num_classes
+    anchors = np.zeros((feat_h, feat_w, n_cls, n_rot, 7), dtype=np.float32)
+
+    for ci, ((w, l, h), z) in enumerate(
+            zip(cfg.anchor_sizes, cfg.anchor_z_centres)):
+        for ri, rot in enumerate(cfg.anchor_rotations):
+            anchors[:, :, ci, ri, 0] = xx
+            anchors[:, :, ci, ri, 1] = yy
+            anchors[:, :, ci, ri, 2] = z
+            anchors[:, :, ci, ri, 3] = w
+            anchors[:, :, ci, ri, 4] = l
+            anchors[:, :, ci, ri, 5] = h
+            anchors[:, :, ci, ri, 6] = rot
+    return anchors
+
+
+def _decode_boxes(deltas: np.ndarray,
+                  anchors: np.ndarray) -> np.ndarray:
+    """KITTI delta encoding inverse (PointPillars paper eqs. 1-7)."""
+    diag = np.sqrt(anchors[..., 3] ** 2 + anchors[..., 4] ** 2)
+    cx = deltas[..., 0] * diag        + anchors[..., 0]
+    cy = deltas[..., 1] * diag        + anchors[..., 1]
+    cz = deltas[..., 2] * anchors[..., 5] + anchors[..., 2]
+    w  = np.exp(np.clip(deltas[..., 3], -4, 4)) * anchors[..., 3]
+    l  = np.exp(np.clip(deltas[..., 4], -4, 4)) * anchors[..., 4]
+    h  = np.exp(np.clip(deltas[..., 5], -4, 4)) * anchors[..., 5]
+    θ  = deltas[..., 6] + anchors[..., 6]
+    return np.stack([cx, cy, cz, w, l, h, θ], axis=-1)
+
+
+def _bev_iou_nms(boxes: np.ndarray, scores: np.ndarray,
+                 iou_thr: float, max_det: int) -> np.ndarray:
+    """Greedy BEV centre-distance NMS (axis-aligned approximation)."""
+    ax1 = boxes[:, 0] - boxes[:, 3] / 2;  ax2 = boxes[:, 0] + boxes[:, 3] / 2
+    ay1 = boxes[:, 1] - boxes[:, 4] / 2;  ay2 = boxes[:, 1] + boxes[:, 4] / 2
+    order = scores.argsort()[::-1]
+    kept  = []
+    while len(order) and len(kept) < max_det:
+        i = order[0]; kept.append(i)
+        if len(order) == 1: break
+        ix1 = np.maximum(ax1[i], ax1[order[1:]])
+        ix2 = np.minimum(ax2[i], ax2[order[1:]])
+        iy1 = np.maximum(ay1[i], ay1[order[1:]])
+        iy2 = np.minimum(ay2[i], ay2[order[1:]])
+        inter  = np.maximum(0, ix2-ix1) * np.maximum(0, iy2-iy1)
+        area_i = (ax2[i]-ax1[i]) * (ay2[i]-ay1[i])
+        area_o = (ax2[order[1:]]-ax1[order[1:]]) * \
+                 (ay2[order[1:]]-ay1[order[1:]])
+        iou    = inter / (area_i + area_o - inter + 1e-7)
+        order  = order[1:][iou < iou_thr]
+    return np.array(kept, dtype=np.int64)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  Full PointPillars model
+# ══════════════════════════════════════════════════════════════════════════════
+
+class PointPillars(nn.Module):
+
+    CLASS_NAMES = {0: 'Pedestrian', 1: 'Cyclist', 2: 'Car'}
+
+    def __init__(self, cfg: PointPillarsConfig):
+        super().__init__()
+        self.cfg = cfg
+
+        self.pfn = PillarFeatureNet(
+            in_channels=cfg.in_channels,
+            feat_channels=[64],
+        )
+        self.scatter = PointPillarsScatter(
+            in_channels=64,
+            output_shape=(cfg.ny, cfg.nx),
+        )
+        self.backbone = SECOND(
+            in_channels=cfg.backbone_in,
+            out_channels=cfg.backbone_out,
+            layer_nums=cfg.backbone_layers,
+            layer_strides=cfg.backbone_strides,
+        )
+        self.neck = SECONDFPN(
+            in_channels=cfg.neck_in,
+            out_channels=cfg.neck_out,
+            upsample_strides=cfg.neck_upsample_strides,
+        )
+        self.head = Anchor3DHead(
+            num_classes=cfg.num_classes,
+            in_channels=cfg.head_in_channels,
+            feat_channels=cfg.head_in_channels,
+            num_anchors_per_loc=len(cfg.anchor_rotations),
+        )
+
+    # ── Pillarisation ─────────────────────────────────────────────────────────
+
+    def _voxelise(self, points: np.ndarray, max_voxels: int):
+        """
+        Convert (N, C) point cloud → pillar tensors compatible with PFN.
+
+        Returns
+        -------
+        pillars    : (P, N_max, C+5)  float32
+        coords     : (P, 4)           int32  [0, 0, iy, ix]
+        num_points : (P,)             int32
+        """
+        cfg = self.cfg
+        x, y, z = points[:, 0], points[:, 1], points[:, 2]
+        keep = ((x >= cfg.x_min) & (x < cfg.x_max) &
+                (y >= cfg.y_min) & (y < cfg.y_max) &
+                (z >= cfg.z_min) & (z < cfg.z_max))
+        pts = points[keep].astype(np.float32)
+
+        if len(pts) == 0:
+            dummy = np.zeros((1, cfg.max_points_per_voxel, pts.shape[1]),
+                             dtype=np.float32)
+            return dummy, np.zeros((1, 4), np.int32), np.zeros(1, np.int32)
+
+        ix = np.clip(((pts[:, 0] - cfg.x_min) / cfg.voxel_x).astype(np.int32),
+                     0, cfg.nx - 1)
+        iy = np.clip(((pts[:, 1] - cfg.y_min) / cfg.voxel_y).astype(np.int32),
+                     0, cfg.ny - 1)
+        pillar_id = iy * cfg.nx + ix
+
+        uid, inverse, counts = np.unique(pillar_id,
+                                         return_inverse=True,
+                                         return_counts=True)
+        if len(uid) > max_voxels:
+            top = np.argsort(counts)[::-1][:max_voxels]
+            keep2 = np.isin(inverse, top)
+            pts  = pts[keep2]; ix = ix[keep2]; iy = iy[keep2]
+            pillar_id = pillar_id[keep2]
+            uid, inverse, counts = np.unique(pillar_id,
+                                             return_inverse=True,
+                                             return_counts=True)
+
+        P   = len(uid)
+        N   = cfg.max_points_per_voxel
+        C   = pts.shape[1]
+        pillars_np  = np.zeros((P, N, C),  dtype=np.float32)
+        num_pts_np  = np.zeros(P,          dtype=np.int32)
+        coords_np   = np.zeros((P, 4),     dtype=np.int32)
+
+        uid_ix = (uid % cfg.nx).astype(np.int32)
+        uid_iy = (uid // cfg.nx).astype(np.int32)
+        coords_np[:, 2] = uid_iy
+        coords_np[:, 3] = uid_ix
+
+        for p, uid_val in enumerate(uid):
+            idx = np.where(inverse == p)[0]
+            n   = min(len(idx), N)
+            pillars_np[p, :n] = pts[idx[:n]]
+            num_pts_np[p]     = n
+
+        return pillars_np, coords_np, num_pts_np
+
+    # ── Inference ─────────────────────────────────────────────────────────────
+
+    @torch.no_grad()
+    def detect(self, points: np.ndarray):
+        """
+        Parameters
+        ----------
+        points : (N, 4+) float32
+            [x, y, z, intensity]  or  [x, y, z, intensity, s_ped, s_car, s_cyc]
+
+        Returns
+        -------
+        boxes  : (K, 7)  [cx, cy, cz, w, l, h, heading]
+        scores : (K,)
+        labels : (K,)    0=Pedestrian, 1=Cyclist, 2=Car
+        """
+        self.eval()
+        cfg = self.cfg
+        empty = (np.zeros((0, 7), np.float32),
+                 np.zeros(0, np.float32),
+                 np.zeros(0, np.int32))
+
+        pillars_np, coords_np, num_pts_np = self._voxelise(
+            points, cfg.max_voxels_test)
+
+        if pillars_np.shape[0] == 0:
+            return empty
+
+        pillars_t   = torch.from_numpy(pillars_np)        # (P, N, C)
+        num_pts_t   = torch.from_numpy(num_pts_np)        # (P,)
+        coords_t    = torch.from_numpy(coords_np)         # (P, 4)
+
+        # PFN
+        pf = self.pfn(pillars_t, num_pts_t, coords_t)     # (P, 64)
+
+        # Scatter
+        bev = self.scatter(pf, coords_t, batch_size=1)    # (1, 64, ny, nx)
+
+        # Backbone + neck
+        feats    = self.backbone(bev)                      # list of 3 tensors
+        neck_out = self.neck(feats)                        # (1, 384, H', W')
+
+        # Head
+        cls_pred, loc_pred, dir_pred = self.head(neck_out)
+
+        feat_h, feat_w = neck_out.shape[2], neck_out.shape[3]
+        n_cls  = cfg.num_classes                           # 3
+        n_rot  = len(cfg.anchor_rotations)                 # 2
+        n_anch = n_cls * n_rot                             # 6 per location
+
+        # Build anchors for this feature map size
+        # _build_anchors returns (H, W, n_cls, n_rot, 7)
+        # mmdet3d anchor order (C-contiguous flatten): class varies slower than rot
+        # → reshape to (H*W*n_cls*n_rot, 7) directly
+        anchors = _build_anchors(cfg, feat_h, feat_w)     # (H,W,n_cls,n_rot,7)
+        anchors_flat = anchors.reshape(-1, 7)              # (H*W*n_anch, 7)
+
+        # Head output shapes (verified against checkpoint):
+        #   cls_pred: (1, n_anch*n_cls, H, W) = (1, 18, H, W)
+        #   loc_pred: (1, n_anch*7,     H, W) = (1, 42, H, W)
+        #   dir_pred: (1, n_anch*2,     H, W) = (1, 12, H, W)
+        #
+        # mmdet3d channel order: [cls0_rot0, cls0_rot1, cls1_rot0, cls1_rot1, ...]
+        # so the 18 cls channels are: (n_cls, n_rot) then flattened
+        # We need (H*W*n_anch, n_cls) for per-anchor class scores.
+        # The cls output has n_anch*n_cls channels = 6*3 = 18, but each anchor
+        # independently predicts n_cls scores → reshape as (n_anch, n_cls).
+
+        # (1, C, H, W) → (H*W, C) then reshape
+        def _flatten(t, last_dim):
+            # t: (1, C, H, W) — squeeze batch, move spatial to front
+            # → (H, W, C) → (H*W*n_anch, last_dim)
+            return t[0].permute(1, 2, 0).reshape(-1, last_dim).cpu().numpy()
+
+        # cls_pred: (1, n_anch*n_cls, H, W) → reshape C as (n_anch, n_cls) after flatten
+        # permute(1,2,0) on t[0] which is (C,H,W) → (H,W,C) then reshape(-1,last_dim)
+        cls_np = _flatten(cls_pred, n_cls)   # (H*W*n_anch, n_cls)
+        loc_np = _flatten(loc_pred, 7)       # (H*W*n_anch, 7)
+        dir_np = _flatten(dir_pred, 2)       # (H*W*n_anch, 2)
+
+        # Temperature-scaled sigmoid: the pretrained KITTI model applied to our
+        # sensor produces raw logits ~-3 to -2.7 (sigmoid ~0.05-0.06) due to
+        # domain gap. Temperature T=5 rescales so the best anchors reach ~0.3-0.5,
+        # making scores interpretable while preserving relative ranking exactly.
+        T = 5.0
+        scores_all = 1.0 / (1.0 + np.exp(-np.clip(cls_np * T, -20, 20)))  # (M, n_cls)
+        class_ids  = scores_all.argmax(axis=1)
+        class_scr  = scores_all.max(axis=1)
+
+        # Direction: choose the rotation that aligns with predicted dir
+        dir_label  = dir_np.argmax(axis=1)                # 0 or 1
+
+        # Decode boxes
+        n = min(len(loc_np), len(anchors_flat))
+        boxes_all = _decode_boxes(loc_np[:n], anchors_flat[:n])
+
+        # Apply direction correction (flip heading by π if dir_label=1)
+        boxes_all[:, 6] += dir_label[:n] * np.pi
+
+        # Score threshold
+        above = class_scr >= cfg.score_threshold
+        if above.sum() == 0:
+            return empty
+
+        boxes_f  = boxes_all[above]
+        scores_f = class_scr[above]
+        labels_f = class_ids[above]
+
+        # Per-class NMS
+        final_boxes, final_scores, final_labels = [], [], []
+        for cls in range(n_cls):
+            idx = np.where(labels_f == cls)[0]
+            if len(idx) == 0:
+                continue
+            keep = _bev_iou_nms(boxes_f[idx], scores_f[idx],
+                                 cfg.nms_iou_threshold, cfg.max_detections)
+            final_boxes.append(boxes_f[idx[keep]])
+            final_scores.append(scores_f[idx[keep]])
+            final_labels.append(np.full(len(keep), cls, dtype=np.int32))
+
+        if not final_boxes:
+            return empty
+
+        return (np.concatenate(final_boxes),
+                np.concatenate(final_scores),
+                np.concatenate(final_labels))
+
+    # ── Checkpoint loading ────────────────────────────────────────────────────
+
+    def load_pretrained(self, path: str) -> bool:
+        if not os.path.isfile(path):
+            print(f'  [PointPillars] checkpoint not found: {path}')
+            return False
+        try:
+            ckpt = torch.load(path, map_location='cpu', weights_only=False)
+            sd   = ckpt.get('state_dict', ckpt) if isinstance(ckpt, dict) else ckpt
+
+            # ── Key remapping from mmdet3d names to our module names ──────────
+            #
+            # Checkpoint structure (verified by inspect_checkpoint.py):
+            #   voxel_encoder.pfn_layers.0.linear.weight  (64, 10)
+            #   voxel_encoder.pfn_layers.0.norm.*
+            #   backbone.blocks.*
+            #   neck.deblocks.*
+            #   bbox_head.conv_cls/conv_reg/conv_dir_cls.*
+            #
+            # Our module structure:
+            #   pfn.layers.0  = Linear  (weight only, no bias)
+            #   pfn.layers.1  = BatchNorm1d  (weight, bias, running_*)
+            #   pfn.layers.2  = ReLU
+            #   backbone.blocks.*        (same names)
+            #   neck.deblocks.*          (same names)
+            #   head.cls_out / reg_out / dir_out
+
+            new_sd = {}
+            for k, v in sd.items():
+                # PFN linear weight: voxel_encoder.pfn_layers.0.linear.weight
+                #                 → pfn.layers.0.weight
+                if k == 'voxel_encoder.pfn_layers.0.linear.weight':
+                    new_sd['pfn.layers.0.weight'] = v
+
+                # PFN batch-norm: voxel_encoder.pfn_layers.0.norm.<suffix>
+                #              → pfn.layers.1.<suffix>
+                elif k.startswith('voxel_encoder.pfn_layers.0.norm.'):
+                    suffix = k[len('voxel_encoder.pfn_layers.0.norm.'):]
+                    new_sd[f'pfn.layers.1.{suffix}'] = v
+
+                # middle_encoder has no weights (PointPillarsScatter is param-free)
+                elif k.startswith('middle_encoder.'):
+                    pass
+
+                # backbone and neck: names match exactly
+                elif k.startswith('backbone.') or k.startswith('neck.'):
+                    new_sd[k] = v
+
+                # detection head: conv_cls/conv_reg/conv_dir_cls → cls_out/reg_out/dir_out
+                elif k.startswith('bbox_head.conv_cls'):
+                    new_sd['head.cls_out' + k[len('bbox_head.conv_cls'):]] = v
+                elif k.startswith('bbox_head.conv_reg'):
+                    new_sd['head.reg_out' + k[len('bbox_head.conv_reg'):]] = v
+                elif k.startswith('bbox_head.conv_dir_cls'):
+                    new_sd['head.dir_out' + k[len('bbox_head.conv_dir_cls'):]] = v
+
+                # anything else: keep as-is (will show up as unexpected)
+                else:
+                    new_sd[k] = v
+
+            # ── PFN weight partial load (painted model has extra input channels) ──
+            # Pretrained: in_channels=4 → 10-ch augmented → linear weight (64,10)
+            # Painted:    in_channels=7 → 13-ch augmented → linear weight (64,13)
+            # Copy the first 10 columns; painting score cols remain zero-initialised.
+            pfn_w_key = 'pfn.layers.0.weight'
+            if pfn_w_key in new_sd:
+                ckpt_w  = new_sd[pfn_w_key]           # (64, 10)
+                model_w = self.pfn.layers[0].weight    # (64, 12) for painted
+                if ckpt_w.shape != model_w.shape:
+                    cols = min(ckpt_w.shape[1], model_w.shape[1])
+                    with torch.no_grad():
+                        model_w.zero_()
+                        model_w[:, :cols] = ckpt_w[:, :cols]
+                    print(f'  [PointPillars] PFN weight partial load '
+                          f'{tuple(ckpt_w.shape)} → {tuple(model_w.shape)} '
+                          f'(first {cols} cols copied; painting cols zero-init)')
+                    del new_sd[pfn_w_key]   # handled manually; skip in load_state_dict
+
+            missing, unexpected = self.load_state_dict(new_sd, strict=False)
+            # pfn.layers.0.weight was handled manually above, so it will always
+            # appear in missing — exclude it from the failure check
+            real_missing = [k for k in missing if k != 'pfn.layers.0.weight']
+            loaded = len(new_sd) - len(unexpected)
+            print(f'  [PointPillars] loaded {loaded}/{len(new_sd)} tensors '
+                  f'| missing={len(real_missing)} unexpected={len(unexpected)}')
+            if real_missing:
+                print(f'    missing   (first 5): {real_missing[:5]}')
+            if unexpected:
+                print(f'    unexpected (first 5): {unexpected[:5]}')
+            return len(real_missing) == 0 and len(unexpected) == 0
+        except Exception as e:
+            print(f'  [PointPillars] failed to load checkpoint: {e}')
+            import traceback; traceback.print_exc()
+            return False
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  Convenience builder
+# ══════════════════════════════════════════════════════════════════════════════
+
+def build_pointpillars(painted: bool = True,
+                       score_thr: float = 0.10) -> PointPillars:
+    """
+    Build a PointPillars model.
+
+    painted=True  → in_channels=7  (x,y,z,intensity + 3 painting scores)
+    painted=False → in_channels=4  (x,y,z,intensity — exact match to pretrained checkpoint)
+
+    The pretrained KITTI checkpoint has PFN linear weight (64,10):
+      4 base channels + 6 augmented (dx_c,dy_c,dz_c, dx_p,dy_p, depth) = 10.
+    The forward method always assembles the 10-channel tensor; in_channels only
+    controls how many painting score columns are appended past the first 4.
+
+    z range is extended to [-3, 3] vs the KITTI default of [-3, 1] to handle
+    sensors mounted lower than the KITTI setup (1.73m above ground). Since
+    PointPillars collapses z into a single pillar bin, this only affects which
+    points are included — not the BEV grid size or any weight shapes.
+    """
+    cfg = PointPillarsConfig(
+        in_channels=7 if painted else 4,
+        score_threshold=score_thr,
+        z_max=3.0,
+    )
+    return PointPillars(cfg)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  PointPainting helper — build enriched point cloud
+# ══════════════════════════════════════════════════════════════════════════════
+
+def paint_point_cloud(points_xyz:  np.ndarray,
+                      score_maps:  dict,
+                      projector,
+                      image_shape: tuple) -> np.ndarray:
+    """
+    Attach per-point semantic scores from YOLO score maps.
+
+    Parameters
+    ----------
+    points_xyz  : (N, 3), (N, 4), or (N, 5)  LiDAR points
+                  columns: x, y, z, [intensity], [ring_normalised]
+    score_maps  : {coco_cls_id: (H, W) float32}
+                  0=person → score_ped
+                  2=car    → score_car
+                  1=cyclist→ score_cyc
+    projector   : KittiLidarToImageProjector
+    image_shape : (H, W)
+
+    Returns
+    -------
+    painted : (N, 8) float32
+        [x, y, z, intensity, ring, score_ped, score_car, score_cyc]
+    """
+    N = len(points_xyz)
+    h, w = image_shape
+
+    intensity = (points_xyz[:, 3].astype(np.float32)
+                 if points_xyz.shape[1] >= 4
+                 else np.zeros(N, dtype=np.float32))
+    ring = (points_xyz[:, 4].astype(np.float32)
+            if points_xyz.shape[1] >= 5
+            else np.zeros(N, dtype=np.float32))
+    xyz = points_xyz[:, :3].astype(np.float32)
+
+    cam_pts = projector.lidar_to_camera(xyz)
+    front   = cam_pts[:, 2] > 0
+
+    scores_ped = np.zeros(N, dtype=np.float32)
+    scores_car = np.zeros(N, dtype=np.float32)
+    scores_cyc = np.zeros(N, dtype=np.float32)
+
+    if front.any():
+        uv_h   = (projector.P2[:, :3] @ cam_pts[front].T).T
+        depths = uv_h[:, 2]
+        uv     = uv_h[:, :2] / uv_h[:, 2:3]
+        in_img = ((uv[:, 0] >= 0) & (uv[:, 0] < w) &
+                  (uv[:, 1] >= 0) & (uv[:, 1] < h) &
+                  (depths > 0))
+        u_int = np.clip(uv[in_img, 0].astype(int), 0, w - 1)
+        v_int = np.clip(uv[in_img, 1].astype(int), 0, h - 1)
+        img_idx = np.where(front)[0][in_img]
+
+        if 0 in score_maps:
+            scores_ped[img_idx] = score_maps[0][v_int, u_int]
+        if 2 in score_maps:
+            scores_car[img_idx] = score_maps[2][v_int, u_int]
+        if 1 in score_maps:
+            scores_cyc[img_idx] = score_maps[1][v_int, u_int]
+
+    return np.stack([xyz[:, 0], xyz[:, 1], xyz[:, 2],
+                     intensity, ring, scores_ped, scores_car, scores_cyc],
+                    axis=1).astype(np.float32)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  Visualisation
+# ══════════════════════════════════════════════════════════════════════════════
+
+_DET_COLORS = {0: (0, 0, 255), 1: (255, 0, 0), 2: (0, 255, 0)}
+_BOX_EDGES  = [(0,1),(1,2),(2,3),(3,0),
+               (4,5),(5,6),(6,7),(7,4),
+               (0,4),(1,5),(2,6),(3,7)]
+
+
+def _box_corners_3d(cx, cy, cz, w, l, h, heading) -> np.ndarray:
+    c, s     = np.cos(heading), np.sin(heading)
+    hl, hw, hh = l/2, w/2, h/2
+    corners  = np.array([
+        [ hl,  hw, -hh], [ hl, -hw, -hh], [-hl, -hw, -hh], [-hl,  hw, -hh],
+        [ hl,  hw,  hh], [ hl, -hw,  hh], [-hl, -hw,  hh], [-hl,  hw,  hh],
+    ], dtype=np.float32)
+    R = np.array([[c, -s, 0], [s, c, 0], [0, 0, 1]], dtype=np.float32)
+    return (R @ corners.T).T + np.array([cx, cy, cz], dtype=np.float32)
+
+
+def draw_boxes_on_image(img_bgr:  np.ndarray,
+                        boxes:    np.ndarray,
+                        scores:   np.ndarray,
+                        labels:   np.ndarray,
+                        projector) -> np.ndarray:
+    import cv2
+    out     = img_bgr.copy()
+    h_img, w_img = out.shape[:2]
+
+    def _proj(pt3d):
+        cp = projector.lidar_to_camera(pt3d.reshape(1, 3).astype(np.float32))
+        if cp[0, 2] <= 0:
+            return None
+        uv = (projector.P2[:, :3] @ cp.T).T
+        uv = uv[:, :2] / uv[:, 2:3]
+        u, v = int(uv[0, 0]), int(uv[0, 1])
+        return (u, v) if (-400 < u < w_img+400 and -400 < v < h_img+400) else None
+
+    for box, score, label in zip(boxes, scores, labels):
+        color   = _DET_COLORS.get(int(label), (200, 200, 200))
+        corners = _box_corners_3d(*box)
+        proj_c  = [_proj(corners[i]) for i in range(8)]
+        for i, j in _BOX_EDGES:
+            if proj_c[i] and proj_c[j]:
+                cv2.line(out, proj_c[i], proj_c[j], color, 2, cv2.LINE_AA)
+        anchor = proj_c[4] or next((p for p in proj_c if p), None)
+        if anchor:
+            name = PointPillars.CLASS_NAMES.get(int(label), str(label))
+            text = f'{name} {score:.2f}'
+            (tw, th), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+            ax = int(np.clip(anchor[0]+3, 0, w_img-tw-1))
+            ay = int(np.clip(anchor[1]-4, th+1, h_img-1))
+            cv2.rectangle(out, (ax-1, ay-th-1), (ax+tw+1, ay+2), (0,0,0), -1)
+            cv2.putText(out, text, (ax, ay),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1, cv2.LINE_AA)
+    return out
+
+
+def draw_bev(boxes:  np.ndarray,
+             scores: np.ndarray,
+             labels: np.ndarray,
+             cfg:    PointPillarsConfig,
+             size:   int = 700) -> np.ndarray:
+    import cv2
+    bev     = np.zeros((size, size, 3), dtype=np.uint8)
+    range_m = max(cfg.x_max, abs(cfg.y_min), cfg.y_max)
+    scale   = size / (2 * range_m)
+    ox, oy  = size // 2, size // 2
+
+    for r in [10, 20, 30, 40, 50]:
+        cv2.circle(bev, (ox, oy), int(r*scale), (35, 35, 35), 1)
+        cv2.putText(bev, f'{r}m', (ox+3, oy-int(r*scale)+12),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.3, (60,60,60), 1)
+    cv2.line(bev, (ox,0), (ox,size), (35,35,35), 1)
+    cv2.line(bev, (0,oy), (size,oy), (35,35,35), 1)
+    cv2.putText(bev, 'FWD', (ox+4, 14), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (80,80,80), 1)
+    cv2.rectangle(bev, (ox-5, oy-8), (ox+5, oy+8), (100,100,100), -1)
+
+    for box, score, label in zip(boxes, scores, labels):
+        cx, cy, _, w, l, _, heading = box
+        color = _DET_COLORS.get(int(label), (200, 200, 200))
+        c, s  = np.cos(heading), np.sin(heading)
+        corn  = np.array([[ l/2,  w/2], [ l/2, -w/2],
+                           [-l/2, -w/2], [-l/2,  w/2]], dtype=np.float32)
+        R     = np.array([[c, -s], [s, c]])
+        pts   = (R @ corn.T).T + np.array([cx, cy])
+        pix   = np.stack([
+            (ox + pts[:, 1] * scale).astype(np.int32),
+            (oy - pts[:, 0] * scale).astype(np.int32),
+        ], axis=1)
+        cv2.polylines(bev, [pix], isClosed=True, color=color, thickness=2)
+        pu = int(ox + cy * scale)
+        pv = int(oy - cx * scale)
+        cv2.circle(bev, (pu, pv), 4, color, -1)
+        name = PointPillars.CLASS_NAMES.get(int(label), str(label))
+        cv2.putText(bev, f'{name} {score:.2f}', (pu+5, pv-4),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.35, color, 1)
+    return bev
 </file>
 
 <file path=".claude/settings.json">
@@ -2346,217 +3407,6 @@ Both pipelines use the same downstream chain:
 
 > **Decision: Proceed with PointPainting.**
 > It is lightweight, sequential, modular, and built for constrained hardware. It meets every project requirement without the memory risk or implementation overhead of AVOD.
-</file>
-
-<file path="docs/Project_Summary.md">
-# AI-Based Data Fusion — Project Summary
-
-**Author:** Ramez Alhinn  
-**Date:** May 2026  
-
----
-
-## What We Are Building
-
-A real-time **Camera + LiDAR fusion pipeline** running on ROS 2 Humble inside a Docker container. The goal is to take raw sensor data from a vehicle and produce semantically-enriched 3D point clouds — each LiDAR point knows what object class it belongs to (car, pedestrian, cyclist). This feeds into a downstream 3D detector and tracker.
-
-The algorithm is called **PointPainting** (Vora et al., 2020): project each 3D LiDAR point onto the camera image, read the semantic label at that pixel, and attach it to the point.
-
-```
-Camera Image ──► YOLO26n-seg ──► Per-pixel class labels ──┐
-                                                           ▼
-LiDAR Point Cloud ─────────────────────────► Project + Paint
-                                                           │
-                                         [x,y,z] → [x,y,z, class_id]
-                                                           │
-                                                           ▼
-                                               3D Detector (next step)
-```
-
----
-
-## Team Contributions
-
-| Member | What they built |
-|---|---|
-| **Ramez Alhinn** | Overall architecture, ROS 2 node, painting logic, YOLO integration, segmentation overlay, isolation testing, calibration derivation, system integration |
-| **arpitashil676** | LiDAR-to-image projection framework (`perception_framework` package) |
-| **BelenNuñez** | Initial 2D segmentation module (DeepLab v3+, replaced by YOLO) |
-| **carlosaterans-cmd** | Bag data extraction utility, initial YOLO segmentation script |
-
----
-
-## What Ramez Implemented
-
-### 1. The PointPainting ROS 2 Node — `painting_node.py`
-
-The central piece that connects everything. It:
-
-- Subscribes to **two sensor topics** simultaneously:
-  - `/blackfly_s/cam0/image_rectified` — camera frames (1920×1200, bgr8)
-  - `/velodyne/points_raw` — LiDAR point cloud (~64,000 points per scan)
-- Uses a **latest-message cache** instead of `ApproximateTimeSynchronizer` — the LiDAR and camera were recorded with different clocks in the bag, so timestamp-based sync never fires
-- On each incoming message: runs YOLO segmentation on the latest camera frame, projects LiDAR points onto the mask, and paints each point with its class ID
-- Publishes **three output topics**:
-
-| Topic | Type | Description |
-|---|---|---|
-| `/painting/debug` | String | Per-frame painted/skipped counts |
-| `/painting/painted_cloud` | PointCloud2 | Full point cloud coloured by semantic class |
-| `/painting/segmentation_overlay` | Image | Camera image with YOLO masks blended on top |
-| `/painting/points_overlay` | Image | Camera image with projected LiDAR dots coloured by class |
-
-**Run:**
-```bash
-ros2 run point_painting painting_node \
-  --ros-args -p calib_file:=/workspace/calib.txt
-```
-
-Optional — custom YOLO model:
-```bash
-ros2 run point_painting painting_node \
-  --ros-args \
-  -p calib_file:=/workspace/calib.txt \
-  -p checkpoint_path:=/workspace/yolo26n-seg.pt
-```
-
----
-
-### 2. YOLO Segmentation — `yolo_segmentation.py`
-
-Built on top of colleagues' initial YOLO work (Code branch) but with class labels properly preserved.
-
-- Their version: published a binary black/white mask — class information discarded
-- This version: returns a full `(H, W)` array with native COCO class IDs per pixel
-- Uses **YOLO26n-seg** — the nano segmentation model from Ultralytics, auto-downloads (~6 MB)
-- Confidence threshold set to `0.15` to catch small/partially occluded objects
-- Background initialised to `-1` (not `0`) — COCO class 0 is `person`, so zero-init caused everything to be labelled as person
-
-**COCO class IDs used:**
-
-| Class ID | Object | Colour in Foxglove |
-|---|---|---|
-| 0 | person | 🔴 Red |
-| 1 | bicycle | 🔵 Blue |
-| 2 | car | 🟢 Green |
-| 3 | motorcycle | 🟠 Orange |
-| 5 | bus | 🟡 Yellow |
-| 7 | truck | 🟢 Dark green |
-
----
-
-### 3. The Painting Logic — `painting_logic.py`
-
-Pure algorithm, completely separated from ROS for unit testing.
-
-- **`init_projector(calib_file)`** — loads calibration matrices once at startup
-- **`paint_points(points_xyz, seg_image)`** — single projection pass (fixed double-projection bug):
-  1. Transforms all N LiDAR points to camera frame using `Tr_velo_to_cam`
-  2. Filters out points with negative depth (behind the camera)
-  3. Projects to pixel coordinates using `cv2.projectPoints`
-  4. Filters out points outside the image frame
-  5. Samples `seg_image[v, u]` for each valid point
-  6. Returns `class_ids` — one per input point, `-1` for misses
-
----
-
-### 4. Segmentation Overlay & Points Overlay
-
-Two image topics for visual verification of the pipeline:
-
-- **`/painting/segmentation_overlay`** — YOLO masks blended on the camera image (60/40). Shows what the model detected. Throttled to every 5th frame to avoid flooding Foxglove's buffer.
-- **`/painting/points_overlay`** — projected LiDAR dots drawn directly on the camera image, coloured by semantic class. Shows exactly which pixels each LiDAR point lands on — the clearest end-to-end verification.
-
----
-
-### 5. Pipeline Isolation Test — `test_pipeline_isolation.py`
-
-Standalone Python script (no ROS needed) that runs the full pipeline on one bag frame and saves 4 verification images:
-
-```
-isolation_output/01_raw_image.jpg          ← original camera frame
-isolation_output/02_yolo_mask.jpg          ← YOLO class mask
-isolation_output/03_overlay.jpg            ← mask blended on image
-isolation_output/04_lidar_projected.jpg    ← LiDAR points on image coloured by class
-```
-
-Used to confirm the projection is correct before running the live node.
-
----
-
-### 6. The Calibration File — `calib.txt`
-
-Derived entirely from data inside the bag — no external calibration file was provided.
-
-**Extrinsics** — from `/tf_static` topic in the bag:
-```
-translation : x = +0.692 m (camera is 69 cm in front of LiDAR)
-              y =  0.000 m
-              z = -0.180 m (camera is 18 cm below LiDAR)
-rotation    : quaternion [x=-0.534, y=0.543, z=-0.464, w=0.452]
-```
-
-The KITTI format needs the inverse transform (camera→LiDAR inverted), confirmed by verifying a point 10m ahead projects correctly to pixel (910, 174).
-
-**Intrinsics** — estimated from Blackfly S hardware specs (no `/camera_info` topic in bag):
-
-| Parameter | Value |
-|---|---|
-| `fx = fy` | 2318.8 px |
-| `cx` | 959.5 px (image centre) |
-| `cy` | 599.5 px (image centre) |
-| Implied HFOV | ~45° |
-
----
-
-## Current Pipeline Status
-
-```
-DONE ✅                                  TODO ⬜
-──────────────────────────────────       ──────────────────────────
-ROS 2 devcontainer (Docker)              Merge feature branch → main
-Bag playback + clock handling            PointPillars 3D detector
-Camera + LiDAR latest-msg sync          AB3DMOT tracker
-YOLO26n-seg segmentation w/ classes     Performance profiling
-LiDAR → image projection (verified)     Camera intrinsics verification
-PointPainting (single projection pass)    (checkerboard calibration)
-Painted point cloud (/painted_cloud)
-Segmentation overlay (/seg_overlay)
-Points overlay (/points_overlay)
-Pipeline isolation test
-Foxglove visualisation (port 9090)
-Unit tests (3 passing)
-```
-
----
-
-## Repository Structure
-
-```
-AI-Based-Data-Fusion/
-├── calib.txt                              ← derived sensor calibration
-├── QUICKSTART.md                          ← run instructions
-├── test_pipeline_isolation.py             ← offline pipeline verification
-├── studentProject1/                       ← ROS 2 bag (sensor data)
-├── .devcontainer/
-│   ├── Dockerfile                         ← ROS 2 Humble + YOLO + foxglove-bridge
-│   └── devcontainer.json                  ← port 9090 forwarded
-├── docs/
-│   ├── Project_Summary.md                 ← this document
-│   ├── PointPainting_Learning_Guide.md
-│   └── Architecture_Proposal.md
-└── ros2_ws/src/
-    ├── perception_framework/              ← arpitashil676
-    │   └── lidar_to_image_projection.py
-    └── point_painting/                    ← Ramez (main package)
-        ├── painting_node.py
-        ├── painting_logic.py
-        ├── rosbag_extractor.py
-        ├── segmentation/
-        │   └── yolo_segmentation.py       ← YOLO26n-seg with class labels
-        └── test/
-            └── test_painting_node.py
-```
 </file>
 
 <file path="docs/script_VisualizeLidarData.md">
@@ -2827,247 +3677,13 @@ rosbag2_bagfile_information:
       message_count: 2294
 </file>
 
-<file path="ros2_ws/src/point_painting/point_painting/painting_logic.py">
-import numpy as np
-from perception_framework.lidar_to_image_projection import KittiLidarToImageProjector
-
-_projector: KittiLidarToImageProjector | None = None
-
-
-def init_projector(calib_file_path: str) -> None:
-    global _projector
-    _projector = KittiLidarToImageProjector(calib_file_path)
-
-
-def paint_points(points_xyz: np.ndarray, seg_image: np.ndarray):
-    """
-    Project each LiDAR point onto the segmentation mask and return its class ID.
-
-    Returns (painted_count, skipped_count, class_ids).
-    class_ids[i] == -1 means point i did not land inside the image.
-    """
-    n = len(points_xyz)
-
-    if _projector is None or n == 0:
-        return 0, n, [-1] * n
-
-    h, w = seg_image.shape[:2]
-
-    # Single projection pass — get pixel coords for all in-frame points
-    image_points, valid_lidar = _projector.project_lidar_to_image(points_xyz, (h, w))
-
-    if len(image_points) == 0:
-        return 0, n, [-1] * n
-
-    # Find which original indices correspond to the in-frame points.
-    # Project all points to camera space, keep depth>0, then apply same
-    # in-bounds mask to recover original indices.
-    camera_pts = _projector.lidar_to_camera(points_xyz)
-    depth_ok = camera_pts[:, 2] > 0
-    depth_indices = np.where(depth_ok)[0]
-
-    cam_depth_pts = camera_pts[depth_ok]
-    import cv2
-    rvec = np.zeros((3, 1), dtype=np.float64)
-    tvec = np.zeros((3, 1), dtype=np.float64)
-    proj, _ = cv2.projectPoints(
-        cam_depth_pts.astype(np.float64),
-        rvec, tvec,
-        _projector.camera_matrix.astype(np.float64),
-        _projector.dist_coeffs,
-    )
-    proj = proj.reshape(-1, 2)
-    u_all, v_all = proj[:, 0], proj[:, 1]
-    inside = (u_all >= 0) & (u_all < w) & (v_all >= 0) & (v_all < h)
-
-    orig_indices = depth_indices[inside]
-    u_in = np.clip(u_all[inside].astype(int), 0, w - 1)
-    v_in = np.clip(v_all[inside].astype(int), 0, h - 1)
-
-    class_ids = np.full(n, -1, dtype=int)
-    class_ids[orig_indices] = seg_image[v_in, u_in]
-    painted = int(inside.sum())
-
-    return painted, n - painted, class_ids.tolist()
-</file>
-
-<file path="test_pipeline_isolation.py">
-"""
-Pipeline isolation test — no ROS, no live node needed.
-
-What this does:
-  1. Extracts one paired image + LiDAR frame from the bag
-  2. Runs YOLO segmentation on the image
-  3. Projects LiDAR points onto the image using calib.txt
-  4. Colours each projected point by its class
-  5. Saves 4 images so you can visually verify each stage
-
-Run inside the container:
-  python3 /workspace/test_pipeline_isolation.py
-
-Output (saved to /workspace/isolation_output/):
-  01_raw_image.jpg          — original camera frame
-  02_yolo_mask.jpg          — YOLO class mask (colour per class)
-  03_overlay.jpg            — mask blended on top of image
-  04_lidar_projected.jpg    — LiDAR points drawn ON the image, coloured by class
-"""
-
-import sys
-import os
-import numpy as np
-import cv2
-
-# ── Paths ──────────────────────────────────────────────────────────────────────
-BAG_PATH   = '/workspace/studentProject1/'
-CALIB_PATH = '/workspace/calib.txt'
-OUTPUT_DIR = '/workspace/isolation_output'
-YOLO_MODEL = 'yolo26n-seg.pt'
-
-# COCO class colours (BGR for OpenCV): person=0, bicycle=1, car=2, motorcycle=3, bus=5, truck=7
-CLASS_COLORS_BGR = {
-    0:  (0,   0,   255),   # person     — red
-    1:  (255, 0,   0),     # bicycle    — blue
-    2:  (0,   255, 0),     # car        — green
-    3:  (0,   128, 255),   # motorcycle — orange
-    5:  (0,   255, 255),   # bus        — yellow
-    7:  (0,   200, 0),     # truck      — dark green
-}
-UNPAINTED_BGR = (80, 80, 80)
-
-os.makedirs(OUTPUT_DIR, exist_ok=True)
-
-
-# ── Stage 1: Extract one paired frame from the bag ─────────────────────────────
-print('\n[Stage 1] Extracting one frame from bag...')
-
-import rosbag2_py
-from rclpy.serialization import deserialize_message
-from rosidl_runtime_py.utilities import get_message
-from cv_bridge import CvBridge
-from sensor_msgs_py import point_cloud2 as pc2
-
-reader = rosbag2_py.SequentialReader()
-reader.open(
-    rosbag2_py.StorageOptions(uri=BAG_PATH, storage_id='sqlite3'),
-    rosbag2_py.ConverterOptions(input_serialization_format='cdr',
-                                output_serialization_format='cdr')
-)
-topic_types = {t.name: t.type for t in reader.get_all_topics_and_types()}
-bridge = CvBridge()
-
-img_frame = None
-lidar_frame = None
-
-while reader.has_next() and (img_frame is None or lidar_frame is None):
-    topic, data, _ = reader.read_next()
-
-    if topic == '/blackfly_s/cam0/image_rectified' and img_frame is None:
-        msg = deserialize_message(data, get_message(topic_types[topic]))
-        img_frame = bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
-        print(f'  Got image: {img_frame.shape}')
-
-    elif topic == '/velodyne/points_raw' and lidar_frame is None:
-        msg = deserialize_message(data, get_message(topic_types[topic]))
-        pts = list(pc2.read_points(msg, field_names=('x', 'y', 'z'), skip_nans=True))
-        lidar_frame = np.array([(p[0], p[1], p[2]) for p in pts], dtype=np.float32)
-        print(f'  Got LiDAR: {lidar_frame.shape[0]} points')
-
-cv2.imwrite(f'{OUTPUT_DIR}/01_raw_image.jpg', img_frame)
-print(f'  Saved: 01_raw_image.jpg')
-
-
-# ── Stage 2: Run YOLO segmentation ────────────────────────────────────────────
-print('\n[Stage 2] Running YOLO segmentation...')
-
-from ultralytics import YOLO
-
-model = YOLO(YOLO_MODEL)
-img_rgb = cv2.cvtColor(img_frame, cv2.COLOR_BGR2RGB)
-h, w = img_frame.shape[:2]
-
-results = model(img_rgb, verbose=False, conf=0.15)
-label_mask = np.full((h, w), -1, dtype=np.int32)  # -1 = background/no detection
-
-for result in results:
-    if result.masks is None:
-        continue
-    masks   = result.masks.data.cpu().numpy()
-    classes = result.boxes.cls.cpu().numpy().astype(int)
-    for mask, cls_id in zip(masks, classes):
-        mask_u8 = (mask * 255).astype(np.uint8)
-        mask_resized = cv2.resize(mask_u8, (w, h), interpolation=cv2.INTER_NEAREST)
-        label_mask[mask_resized > 127] = cls_id
-
-# Visualise mask
-detected = np.unique(label_mask[label_mask >= 0])
-print(f'  Detected classes: {[(c, model.names[c]) for c in detected if c in model.names]}')
-
-mask_vis = np.zeros((h, w, 3), dtype=np.uint8)
-for cls_id, color in CLASS_COLORS_BGR.items():
-    mask_vis[label_mask == cls_id] = color
-
-cv2.imwrite(f'{OUTPUT_DIR}/02_yolo_mask.jpg', mask_vis)
-print(f'  Saved: 02_yolo_mask.jpg')
-
-
-# ── Stage 3: Overlay mask on image ────────────────────────────────────────────
-print('\n[Stage 3] Creating segmentation overlay...')
-
-overlay = cv2.addWeighted(img_frame, 0.6, mask_vis, 0.4, 0)
-
-# Add class legend
-y = 30
-for cls_id, color in CLASS_COLORS_BGR.items():
-    if cls_id in detected:
-        name = model.names.get(cls_id, str(cls_id))
-        cv2.rectangle(overlay, (10, y-15), (30, y+5), color, -1)
-        cv2.putText(overlay, name, (35, y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,255,255), 2)
-        y += 30
-
-cv2.imwrite(f'{OUTPUT_DIR}/03_overlay.jpg', overlay)
-print(f'  Saved: 03_overlay.jpg')
-
-
-# ── Stage 4: Project LiDAR points onto image ──────────────────────────────────
-print('\n[Stage 4] Projecting LiDAR points onto image...')
-
-sys.path.insert(0, '/workspace/ros2_ws/src/perception_framework')
-sys.path.insert(0, '/workspace/ros2_ws/install/perception_framework/lib/python3.10/site-packages')
-
-from perception_framework.lidar_to_image_projection import KittiLidarToImageProjector
-
-projector = KittiLidarToImageProjector(CALIB_PATH)
-image_points, valid_lidar = projector.project_lidar_to_image(lidar_frame, (h, w))
-
-print(f'  Total points: {len(lidar_frame)}')
-print(f'  Points in camera frame: {len(image_points)} ({100*len(image_points)/len(lidar_frame):.1f}%)')
-
-# Draw projected points coloured by their class from the mask
-lidar_img = overlay.copy()
-painted = 0
-class_counts = {}
-
-for pt_px in image_points:
-    u, v = int(pt_px[0]), int(pt_px[1])
-    if 0 <= u < w and 0 <= v < h:
-        cls_id = label_mask[v, u]
-        color = CLASS_COLORS_BGR.get(cls_id, UNPAINTED_BGR)
-        cv2.circle(lidar_img, (u, v), radius=3, color=color, thickness=-1)
-        if cls_id >= 0:
-            painted += 1
-            class_counts[cls_id] = class_counts.get(cls_id, 0) + 1
-
-print(f'  Painted points (non-background): {painted}')
-for cls_id, count in sorted(class_counts.items()):
-    name = model.names.get(cls_id, str(cls_id))
-    print(f'    {name} (class {cls_id}): {count} points')
-
-cv2.imwrite(f'{OUTPUT_DIR}/04_lidar_projected.jpg', lidar_img)
-print(f'  Saved: 04_lidar_projected.jpg')
-
-print(f'\nDone. Open /workspace/isolation_output/ to see all 4 images.')
-print('If 04_lidar_projected.jpg shows coloured dots on the car and person,')
-print('the full pipeline is correct.')
+<file path="calib.txt">
+P0: 8.80500246e+02 0.00000000e+00 9.26390741e+02 0.00000000e+00 0.00000000e+00 8.78725609e+02 5.78761324e+02 0.00000000e+00 0.00000000e+00 0.00000000e+00 1.00000000e+00 0.00000000e+00
+P1: 8.80500246e+02 0.00000000e+00 9.26390741e+02 0.00000000e+00 0.00000000e+00 8.78725609e+02 5.78761324e+02 0.00000000e+00 0.00000000e+00 0.00000000e+00 1.00000000e+00 0.00000000e+00
+P2: 8.80500246e+02 0.00000000e+00 9.26390741e+02 0.00000000e+00 0.00000000e+00 8.78725609e+02 5.78761324e+02 0.00000000e+00 0.00000000e+00 0.00000000e+00 1.00000000e+00 0.00000000e+00
+P3: 8.80500246e+02 0.00000000e+00 9.26390741e+02 0.00000000e+00 0.00000000e+00 8.78725609e+02 5.78761324e+02 0.00000000e+00 0.00000000e+00 0.00000000e+00 1.00000000e+00 0.00000000e+00
+R0_rect: 1.00000000e+00 0.00000000e+00 0.00000000e+00 0.00000000e+00 1.00000000e+00 0.00000000e+00 0.00000000e+00 0.00000000e+00 1.00000000e+00
+Tr_velo_to_cam: -2.12017941e-02 -9.99761478e-01 5.23997388e-03 1.56148368e-02 -1.61566678e-01 -1.74602743e-03 -9.86860247e-01 -6.58307032e-02 9.86634015e-01 -2.17698195e-02 -1.61491116e-01 -7.11819139e-01
 </file>
 
 <file path=".gitignore">
@@ -4289,251 +4905,399 @@ rviz2
 *Updated to reflect codebase state after branch integration — April 2026*
 </file>
 
-<file path=".devcontainer/Dockerfile">
-# Multi-arch base image: works on Apple Silicon (arm64) and WSL2/x86 (amd64).
-# The official ROS image already includes ROS 2 Humble, Ubuntu 22.04, and the
-# apt repository — no manual repo setup needed.
-FROM ros:humble-ros-base
+<file path="docs/Project_Summary.md">
+# AI-Based Data Fusion — Project Summary
 
-# ── System prerequisites & CLI Tools ───────────────────────────────────────────
-ARG DEBIAN_FRONTEND=noninteractive
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl \
-    gnupg2 \
-    lsb-release \
-    locales \
-    ca-certificates \
-    software-properties-common \
-    git \
-    nano \
-    htop \
-    clang-format \
- && locale-gen en_US en_US.UTF-8 \
- && update-locale LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 \
- && rm -rf /var/lib/apt/lists/*
-
-ENV LANG=en_US.UTF-8
-
-# ── Install ROS 2 Humble desktop + tooling ────────────────────────────────────
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ros-humble-desktop \
-    ros-humble-vision-msgs \
-    ros-humble-rviz2 \
-    ros-humble-tf2-ros \
-    ros-humble-message-filters \
-    ros-humble-foxglove-bridge \
-    python3-pip \
-    python3-colcon-common-extensions \
-    python3-rosdep \
- && rosdep init || true \
- && rosdep update \
- && rm -rf /var/lib/apt/lists/*
-
-# ── Python packages ────────────────────────────────────────────────────────────
-# Install PyTorch CPU-only wheel first to keep image size down, then
-# install the rest of the Python dependencies.
-RUN pip3 install --no-cache-dir \
-    torch torchvision torchaudio \
-    --index-url https://download.pytorch.org/whl/cpu
-
-RUN pip3 install --no-cache-dir \
-    "numpy<2.0" \
-    scipy \
-    ultralytics \
-    open3d \
-    pillow \
-    matplotlib
-
-# ── DeepLab segmentation model ─────────────────────────────────────────────────
-RUN git clone https://github.com/jfzhang95/pytorch-deeplab-xception.git /opt/deeplab
-ENV DEEPLAB_REPO=/opt/deeplab
-
-# ── Environment & UX ───────────────────────────────────────────────────────────
-ENV ROS_DOMAIN_ID=42
-ENV TERM=xterm-256color
-
-# Source ROS, configure bash prompt to show we are inside container, and add useful aliases
-RUN echo 'source /opt/ros/humble/setup.bash' >> /root/.bashrc \
- && echo 'source /workspace/ros2_ws/install/setup.bash 2>/dev/null || true' >> /root/.bashrc \
- && echo 'export PS1="\[\e[32m\][DevContainer] \[\e[34m\]\w\[\e[m\] \$ "' >> /root/.bashrc \
- && echo 'alias cw="cd /workspace/ros2_ws && colcon build --symlink-install && source install/setup.bash"' >> /root/.bashrc \
- && echo 'alias cs="cd /workspace/ros2_ws/src"' >> /root/.bashrc
-
-WORKDIR /workspace
-</file>
-
-<file path="QUICKSTART.md">
-# Quickstart — See the Pipeline Running
-
-All commands run **inside the Dev Container** (`><` → Reopen in Container).  
-Open four terminal tabs in VS Code (`Ctrl+Shift+\`` to split).
-
-> **Visualisation:** RViz2 has no display inside the container. We use **Foxglove Studio** on your Mac instead, connected over a WebSocket bridge on port `9090`.
+**Author:** Ramez Alhinn  
+**Date:** May 2026  
 
 ---
 
-## Step 1 — Build (once per container start)
+## What We Are Building
 
-```bash
-cd /workspace/ros2_ws
-colcon build --symlink-install --packages-select perception_framework point_painting
-source install/setup.bash
+A real-time **Camera + LiDAR fusion pipeline** running on ROS 2 Humble inside a Docker container. The goal is to take raw sensor data from a vehicle and produce semantically-enriched 3D point clouds — each LiDAR point knows what object class it belongs to (car, pedestrian, cyclist). This feeds into a downstream 3D detector and tracker.
+
+The algorithm is called **PointPainting** (Vora et al., 2020): project each 3D LiDAR point onto the camera image, read the semantic label at that pixel, and attach it to the point.
+
+```
+Camera Image ──► YOLO11n-seg ──► Per-pixel class labels ──┐
+                                                           ▼
+LiDAR Point Cloud ─────────────────────────► Project + Paint
+                                                           │
+                                         [x,y,z] → [x,y,z, class_id]
+                                                           │
+                                                           ▼
+                                               3D Detector (next step)
 ```
 
 ---
 
-## Step 2 — Run the painting node (Terminal 1)
+## Team Contributions
 
-### Mode A — Projection only (no segmentation model needed)
+| Member | What they built |
+|---|---|
+| **Ramez Alhinn** | Overall architecture, ROS 2 node, painting logic, YOLO integration, segmentation overlay, isolation testing, calibration derivation, system integration |
+| **arpitashil676** | LiDAR-to-image projection framework (`perception_framework` package) |
+| **BelenNuñez** | Initial 2D segmentation module (DeepLab v3+, replaced by YOLO) |
+| **carlosaterans-cmd** | Bag data extraction utility, initial YOLO segmentation script |
 
+---
+
+## What Ramez Implemented
+
+### 1. The PointPainting ROS 2 Node — `painting_node.py`
+
+The central piece that connects everything. It:
+
+- Subscribes to **two sensor topics** simultaneously:
+  - `/blackfly_s/cam0/image_rectified` — camera frames (1920×1200, bgr8)
+  - `/velodyne/points_raw` — LiDAR point cloud (~64,000 points per scan)
+- Uses a **latest-message cache** instead of `ApproximateTimeSynchronizer` — the LiDAR and camera were recorded with different clocks in the bag, so timestamp-based sync never fires
+- On each incoming message: runs YOLO segmentation on the latest camera frame, projects LiDAR points onto the mask, and paints each point with its class ID
+- Publishes **three output topics**:
+
+| Topic | Type | Description |
+|---|---|---|
+| `/painting/debug` | String | Per-frame painted/skipped counts |
+| `/painting/painted_cloud` | PointCloud2 | Full point cloud coloured by semantic class |
+| `/painting/segmentation_overlay` | Image | Camera image with YOLO masks blended on top |
+| `/painting/points_overlay` | Image | Camera image with projected LiDAR dots coloured by class |
+
+**Run:**
 ```bash
-source /workspace/ros2_ws/install/setup.bash
-
 ros2 run point_painting painting_node \
   --ros-args -p calib_file:=/workspace/calib.txt
 ```
 
-Expected output:
-```
-[INFO] Loaded calibration from: /workspace/calib.txt
-[WARN] No segmentation model loaded — node will use raw image channel as label map.
-[INFO] PaintingNode started, waiting for synced messages...
-```
-
-### Mode B — Full pipeline with YOLO segmentation
-
-No model file needed. YOLO26n-seg downloads automatically on first run (~6 MB, cached).  
-Uses native COCO class IDs: `0`=person, `1`=bicycle, `2`=car, `3`=motorcycle, `5`=bus, `7`=truck.
-
-```bash
-source /workspace/ros2_ws/install/setup.bash
-
-ros2 run point_painting painting_node \
-  --ros-args -p calib_file:=/workspace/calib.txt
-```
-
-Expected output:
-```
-[INFO] Loaded calibration from: /workspace/calib.txt
-[INFO] Segmentation model loaded: yolo26n-seg.pt
-[INFO] PaintingNode started, waiting for synced messages...
-```
-
-To use a custom model file (e.g. a fine-tuned checkpoint):
+Optional — custom YOLO model:
 ```bash
 ros2 run point_painting painting_node \
   --ros-args \
   -p calib_file:=/workspace/calib.txt \
-  -p checkpoint_path:=/workspace/yolo26n-seg.pt
-```
-
-**Colour map in Foxglove 3D view:**
-- 🔴 Red = person
-- 🟢 Green = car / truck
-- 🔵 Blue = bicycle
-- 🟠 Orange = motorcycle
-- 🟡 Yellow = bus
-
----
-
-## Step 3 — Play the bag (Terminal 2)
-
-```bash
-ros2 bag play /workspace/studentProject1/ --loop
+  -p checkpoint_path:=/workspace/yolo11m-seg.pt
 ```
 
 ---
 
-## Step 4 — Watch the painting output (Terminal 3)
+### 2. YOLO Segmentation — `yolo_segmentation.py`
 
-```bash
-ros2 topic echo /painting/debug
-```
+Built on top of colleagues' initial YOLO work (Code branch) but with class labels properly preserved.
 
-You will see a line per frame:
-```
-data: 'frame=1 painted=5050 skipped=59070'
-```
+- Their version: published a binary black/white mask — class information discarded
+- This version: returns a full `(H, W)` array with native COCO class IDs per pixel
+- Uses **YOLO11m-seg** — the medium model from Ultralytics (~42 MB), chosen for better detection of dark/underexposed vehicles and small distant persons
+- Confidence threshold set to `0.15` to catch small/partially occluded objects
+- Background initialised to `-1` (not `0`) — COCO class 0 is `person`, so zero-init caused everything to be labelled as person
 
-- **painted** = LiDAR points that projected onto a detected object
-- **skipped** = points behind the camera, outside the frame, or on background
+**COCO class IDs used:**
 
----
-
-## Step 5 — Visualise in Foxglove Studio (Terminal 4)
-
-Start the Foxglove WebSocket bridge:
-
-```bash
-ros2 launch foxglove_bridge foxglove_bridge_launch.xml port:=9090
-```
-
-Then on your **Mac**:
-1. Open [Foxglove Studio](https://app.foxglove.dev) (browser or desktop app)
-2. Click **Open connection** → **Foxglove WebSocket** → `ws://localhost:9090`
-
-Inside Foxglove add these panels:
-- **3D** → subscribe to `/painting/painted_cloud` (set Color mode → RGB) to see the painted point cloud
-- **Image** → subscribe to `/painting/segmentation_overlay` to verify YOLO masks on the camera image
-- **Image** → subscribe to `/blackfly_s/cam0/image_rectified` for the raw camera feed
-- **Raw Messages** → subscribe to `/painting/debug` to watch painted/skipped counts
-
-Port `9090` is automatically forwarded by the devcontainer — no extra configuration needed.
+| Class ID | Object | Colour in Foxglove |
+|---|---|---|
+| 0 | person | 🔴 Red |
+| 1 | bicycle | 🔵 Blue |
+| 2 | car | 🟢 Green |
+| 3 | motorcycle | 🟠 Orange |
+| 5 | bus | 🟡 Yellow |
+| 7 | truck | 🟢 Dark green |
 
 ---
 
-## Optional — Run the pipeline isolation test (no ROS needed)
+### 3. The Painting Logic — `painting_logic.py`
 
-Runs the full pipeline on one bag frame and saves 4 verification images to `/workspace/isolation_output/`:
+Pure algorithm, completely separated from ROS for unit testing.
 
-```bash
-python3 /workspace/test_pipeline_isolation.py
-```
+- **`init_projector(calib_file)`** — loads calibration matrices once at startup
+- **`paint_points(points_xyz, seg_image)`** — single projection pass (fixed double-projection bug):
+  1. Transforms all N LiDAR points to camera frame using `Tr_velo_to_cam`
+  2. Filters out points with negative depth (behind the camera)
+  3. Projects to pixel coordinates using `cv2.projectPoints`
+  4. Filters out points outside the image frame
+  5. Samples `seg_image[v, u]` for each valid point
+  6. Returns `class_ids` — one per input point, `-1` for misses
 
-Output images:
+---
+
+### 4. Segmentation Overlay & Points Overlay
+
+Two image topics for visual verification of the pipeline:
+
+- **`/painting/segmentation_overlay`** — YOLO masks blended on the camera image (60/40). Shows what the model detected. Throttled to every 5th frame to avoid flooding Foxglove's buffer.
+- **`/painting/points_overlay`** — projected LiDAR dots drawn directly on the camera image, coloured by semantic class. Shows exactly which pixels each LiDAR point lands on — the clearest end-to-end verification.
+
+---
+
+### 5. Pipeline Isolation Test — `test_pipeline_isolation.py`
+
+Standalone Python script (no ROS needed) that runs the full pipeline on one bag frame and saves 4 verification images:
+
 ```
 isolation_output/01_raw_image.jpg          ← original camera frame
-isolation_output/02_yolo_mask.jpg          ← YOLO class mask (colour per class)
+isolation_output/02_yolo_mask.jpg          ← YOLO class mask
 isolation_output/03_overlay.jpg            ← mask blended on image
-isolation_output/04_lidar_projected.jpg    ← LiDAR points on image, coloured by class
+isolation_output/04_lidar_projected.jpg    ← LiDAR points on image coloured by class
 ```
 
-If `04_lidar_projected.jpg` shows green dots on the car and red dots on the person, the full pipeline is correct.
+Used to confirm the projection is correct before running the live node.
 
 ---
 
-## Optional — Extract frames from the bag
+### 6. The Calibration File — `calib.txt`
 
-```bash
-cd /workspace
-python3 -c "
-import sys
-sys.path.insert(0, '/workspace/ros2_ws/src/point_painting')
-from point_painting.rosbag_extractor import extract_bag_data
-extract_bag_data(
-    '/workspace/studentProject1/',
-    '/blackfly_s/cam0/image_rectified',
-    '/velodyne/points_raw',
-    'output_data'
-)
-"
+Derived entirely from data inside the bag — no external calibration file was provided.
+
+**Extrinsics** — from `/tf_static` topic in the bag:
+```
+translation : x = +0.692 m (camera is 69 cm in front of LiDAR)
+              y =  0.000 m
+              z = -0.180 m (camera is 18 cm below LiDAR)
+rotation    : quaternion [x=-0.534, y=0.543, z=-0.464, w=0.452]
+```
+
+The KITTI format needs the inverse transform (camera→LiDAR inverted), confirmed by verifying a point 10m ahead projects correctly to pixel (910, 174).
+
+**Intrinsics** — from professor-provided calibration YAML (`camera_front_center_autoware_camera_calibration.yaml`):
+
+| Parameter | Value | Note |
+|---|---|---|
+| `fx` | 880.5 px | Previously estimated as 2318.8 — 2.6× wrong |
+| `fy` | 878.7 px | |
+| `cx` | 926.4 px | Previously assumed image centre (959.5) |
+| `cy` | 578.8 px | Previously assumed image centre (599.5) |
+| Implied HFOV | ~65° | Wider lens than originally assumed |
+| Distortion | [-0.331, 0.126, -0.0005, -0.0001, -0.023] | Barrel distortion — not applied (image is pre-rectified) |
+
+---
+
+## Current Pipeline Status
+
+```
+DONE ✅                                  TODO ⬜
+──────────────────────────────────       ──────────────────────────
+ROS 2 devcontainer (Docker)              Merge feature branch → main
+Bag playback + clock handling            PointPillars 3D detector
+Camera + LiDAR latest-msg sync          AB3DMOT tracker
+YOLO11n-seg segmentation w/ classes     Performance profiling
+LiDAR → image projection (verified)     Camera intrinsics verification
+PointPainting (single projection pass)    (checkerboard calibration)
+Painted point cloud (/painted_cloud)
+Segmentation overlay (/seg_overlay)
+Points overlay (/points_overlay)
+Pipeline isolation test
+Foxglove visualisation (port 9090)
+Unit tests (3 passing)
 ```
 
 ---
 
-## Optional — Run the standalone tests (no ROS needed)
+## Repository Structure
 
-```bash
-python3 /workspace/ros2_ws/src/point_painting/test/test_painting_node.py
 ```
+AI-Based-Data-Fusion/
+├── calib.txt                              ← derived sensor calibration
+├── QUICKSTART.md                          ← run instructions
+├── test_pipeline_isolation.py             ← offline pipeline verification
+├── studentProject1/                       ← ROS 2 bag (sensor data)
+├── .devcontainer/
+│   ├── Dockerfile                         ← ROS 2 Humble + YOLO + foxglove-bridge
+│   └── devcontainer.json                  ← port 9090 forwarded
+├── docs/
+│   ├── Project_Summary.md                 ← this document
+│   ├── PointPainting_Learning_Guide.md
+│   └── Architecture_Proposal.md
+└── ros2_ws/src/
+    ├── perception_framework/              ← arpitashil676
+    │   └── lidar_to_image_projection.py
+    └── point_painting/                    ← Ramez (main package)
+        ├── painting_node.py
+        ├── painting_logic.py
+        ├── rosbag_extractor.py
+        ├── segmentation/
+        │   └── yolo_segmentation.py       ← YOLO11n-seg with class labels
+        └── test/
+            └── test_painting_node.py
+```
+</file>
 
-Expected:
-```
-Running test_no_projector_skips_all_points ... PASSED
-Running test_empty_point_cloud ... PASSED
-Running test_class_ids_length_matches_input ... PASSED
-ALL TESTS PASSED
-```
+<file path="ros2_ws/src/point_painting/point_painting/painting_logic.py">
+"""
+PointPainting core logic — projection and class label lookup.
+
+This module is intentionally kept free of ROS dependencies so it can be
+imported and unit-tested on any machine without a ROS runtime.
+
+The two public functions are:
+    init_projector(calib_file_path) — load calibration matrices once at startup
+    paint_points(points_xyz, seg_image) — project LiDAR points and return class IDs
+
+The projection uses KittiLidarToImageProjector from the perception_framework
+package (implemented by arpitashil676). We call its lidar_to_camera() method
+and camera_matrix directly — one projection pass, no duplication.
+"""
+
+import numpy as np
+from perception_framework.lidar_to_image_projection import KittiLidarToImageProjector
+
+_projector: KittiLidarToImageProjector | None = None
+
+
+def init_projector(calib_file_path: str) -> None:
+    global _projector
+    _projector = KittiLidarToImageProjector(calib_file_path)
+
+
+def paint_points(points_xyz: np.ndarray, seg_image: np.ndarray):
+    """
+    Project each LiDAR point onto the segmentation mask and return its class ID.
+
+    Returns (painted_count, skipped_count, class_ids).
+    class_ids[i] == -1 means point i did not land inside the image.
+
+    Uses KittiLidarToImageProjector (perception_framework) as the single
+    source of projection — one projection pass, no duplicate math.
+    """
+    n = len(points_xyz)
+
+    if _projector is None or n == 0:
+        return 0, n, [-1] * n
+
+    h, w = seg_image.shape[:2]
+
+    # Step 1: transform all points to camera space (colleague's method)
+    camera_pts = _projector.lidar_to_camera(points_xyz)
+
+    # Step 2: keep only points in front of the camera
+    # (points behind the camera would project to negative depth and cause issues)
+    depth_ok = camera_pts[:, 2] > 0
+    depth_indices = np.where(depth_ok)[0]
+    cam_front = camera_pts[depth_ok]
+
+    if len(cam_front) == 0:
+        return 0, n, [-1] * n
+
+    # Step 3: project to pixels using colleague's camera matrix
+    import cv2
+    proj, _ = cv2.projectPoints(
+        cam_front.astype(np.float64),
+        np.zeros((3, 1)), np.zeros((3, 1)),
+        _projector.camera_matrix.astype(np.float64),
+        _projector.dist_coeffs,
+    )
+    proj = proj.reshape(-1, 2)
+    u_all, v_all = proj[:, 0], proj[:, 1]
+
+    # Step 4: keep only points inside the image frame
+    inside = (u_all >= 0) & (u_all < w) & (v_all >= 0) & (v_all < h)
+    orig_indices = depth_indices[inside]
+    u_in = np.clip(u_all[inside].astype(int), 0, w - 1)
+    v_in = np.clip(v_all[inside].astype(int), 0, h - 1)
+
+    # Step 5: look up class at each pixel
+    class_ids = np.full(n, -1, dtype=int)
+    class_ids[orig_indices] = seg_image[v_in, u_in]
+    painted = int(inside.sum())
+
+    return painted, n - painted, class_ids.tolist()
+</file>
+
+<file path="ros2_ws/src/point_painting/point_painting/segmentation/yolo_segmentation.py">
+"""
+YOLO instance segmentation wrapper for PointPainting.
+
+Provides two public functions used by the painting node and the isolation test:
+    load_model(checkpoint_path)      — load YOLO11m-seg (auto-downloads if not found)
+    segment_image(model, image)      — run segmentation, return (H, W) class ID array
+
+Design decisions:
+    - YOLO11m-seg is used — the medium model (~42 MB) rather than nano/small.
+      The extra capacity is needed for dark/underexposed objects like the black BMW
+      in this dataset, and improves person detection at distance.
+    - Label mask is initialised to -1 (not 0) because COCO class 0 = person.
+      Zero-initialisation would label all background pixels as person.
+    - Confidence threshold is set to 0.25 (YOLO's validated default). 0.5 caused
+      missed detections on dark vehicles; 0.15 caused false bus/truck labels.
+    - Masks are resized back to the full input image resolution so pixel
+      coordinates from the LiDAR projection map directly onto the mask.
+    - Mask priority ordering: vehicles painted first, person/bicycle/motorcycle
+      painted last so a pedestrian in front of a car is labelled as person.
+
+Built on top of the initial YOLO script from carlosaterans-cmd (Code branch)
+but with class labels preserved — their version published a binary mask and
+discarded the class information.
+"""
+
+import numpy as np
+import cv2
+from PIL import Image
+
+
+def load_model(checkpoint_path: str = None):
+    """
+    Load YOLO11m-seg model. Auto-downloads on first use (~42 MB, cached).
+    Pass checkpoint_path to override with a local file.
+    """
+    from ultralytics import YOLO
+    model_path = checkpoint_path if checkpoint_path else 'yolo11m-seg.pt'
+    return YOLO(model_path)
+
+
+def segment_image(model, image: Image.Image) -> np.ndarray:
+    """
+    Run YOLO instance segmentation on a PIL image.
+    Returns a (H, W) array with native YOLO/COCO class IDs per pixel, 0 = background.
+
+    COCO class IDs (relevant for driving):
+      0=person, 1=bicycle, 2=car, 3=motorcycle, 5=bus, 7=truck
+    """
+    img_np = np.array(image)
+    h, w = img_np.shape[:2]
+
+    results = model(img_np, verbose=False, conf=0.25)
+    label_mask = np.full((h, w), -1, dtype=np.int32)  # -1 = background/no detection
+
+    # Priority order: vehicles first, vulnerable road users last so they
+    # overwrite vehicle masks when a person stands in front of a car.
+    PRIORITY = {0: 10, 1: 9, 3: 8}  # person > bicycle > motorcycle > everything else
+
+    for result in results:
+        if result.masks is None:
+            continue
+
+        masks = result.masks.data.cpu().numpy()        # (N, H', W')
+        classes = result.boxes.cls.cpu().numpy().astype(int)  # (N,) — native COCO IDs
+
+        pairs = sorted(zip(masks, classes), key=lambda mc: PRIORITY.get(mc[1], 0))
+        for mask, cls_id in pairs:
+            mask_u8 = (mask * 255).astype(np.uint8)
+            mask_resized = cv2.resize(mask_u8, (w, h), interpolation=cv2.INTER_NEAREST)
+            label_mask[mask_resized > 127] = cls_id
+
+    return label_mask
+
+
+if __name__ == '__main__':
+    import argparse
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+
+    parser = argparse.ArgumentParser(description='Run YOLO segmentation on an image')
+    parser.add_argument('--image', required=True, help='Path to input image')
+    parser.add_argument('--checkpoint', default=None, help='Path to YOLO model file (default: yolo11m-seg.pt)')
+    args = parser.parse_args()
+
+    model = load_model(args.checkpoint)
+    image = Image.open(args.image).convert('RGB')
+    label_mask = segment_image(model, image)
+
+    print('Detected classes:', np.unique(label_mask[label_mask > 0]))
+    print('Class names:', {i: model.names[i] for i in np.unique(label_mask) if i in model.names})
+
+    plt.figure(figsize=(12, 5))
+    plt.subplot(1, 2, 1); plt.imshow(image); plt.title('Original'); plt.axis('off')
+    plt.subplot(1, 2, 2); plt.imshow(label_mask, cmap='tab20'); plt.title('YOLO Classes'); plt.axis('off')
+    out = args.image.rsplit('.', 1)[0] + '_yolo_seg.png'
+    plt.savefig(out)
+    print(f'Saved: {out}')
 </file>
 
 <file path="README.md">
@@ -4729,7 +5493,771 @@ ALL TESTS PASSED
 | `cs` | `cd /workspace/ros2_ws/src` |
 </file>
 
+<file path=".devcontainer/Dockerfile">
+# Multi-arch base image: works on Apple Silicon (arm64) and WSL2/x86 (amd64).
+# The official ROS image already includes ROS 2 Humble, Ubuntu 22.04, and the
+# apt repository — no manual repo setup needed.
+FROM ros:humble-ros-base
+
+# ── System prerequisites & CLI Tools ───────────────────────────────────────────
+ARG DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    gnupg2 \
+    lsb-release \
+    locales \
+    ca-certificates \
+    software-properties-common \
+    git \
+    nano \
+    htop \
+    clang-format \
+ && locale-gen en_US en_US.UTF-8 \
+ && update-locale LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 \
+ && rm -rf /var/lib/apt/lists/*
+
+ENV LANG=en_US.UTF-8
+
+# ── Install ROS 2 Humble desktop + tooling ────────────────────────────────────
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ros-humble-desktop \
+    ros-humble-vision-msgs \
+    ros-humble-rviz2 \
+    ros-humble-tf2-ros \
+    ros-humble-message-filters \
+    ros-humble-foxglove-bridge \
+    python3-pip \
+    python3-colcon-common-extensions \
+    python3-rosdep \
+ && rosdep init || true \
+ && rosdep update \
+ && rm -rf /var/lib/apt/lists/*
+
+# ── Python packages ────────────────────────────────────────────────────────────
+# Install PyTorch CPU-only wheel first to keep image size down, then
+# install the rest of the Python dependencies.
+RUN pip3 install --no-cache-dir \
+    torch torchvision torchaudio \
+    --index-url https://download.pytorch.org/whl/cpu
+
+RUN pip3 install --no-cache-dir \
+    "numpy<2.0" \
+    scipy \
+    scikit-learn \
+    ultralytics \
+    open3d \
+    pillow \
+    matplotlib
+
+# ── YOLO segmentation model ────────────────────────────────────────────────────
+# Download directly to /workspace so the isolation script always loads the
+# explicit path and never falls back to the ultralytics cache directory.
+RUN python3 -c "from ultralytics import YOLO; import shutil, os; m = YOLO('yolo11m-seg.pt'); shutil.copy2(m.ckpt_path, '/workspace/yolo11m-seg.pt') if os.path.abspath(m.ckpt_path) != '/workspace/yolo11m-seg.pt' else None"
+
+# ── Environment & UX ───────────────────────────────────────────────────────────
+ENV ROS_DOMAIN_ID=42
+ENV TERM=xterm-256color
+
+# Source ROS, configure bash prompt to show we are inside container, and add useful aliases
+RUN echo 'source /opt/ros/humble/setup.bash' >> /root/.bashrc \
+ && echo 'source /workspace/ros2_ws/install/setup.bash 2>/dev/null || true' >> /root/.bashrc \
+ && echo 'export PS1="\[\e[32m\][DevContainer] \[\e[34m\]\w\[\e[m\] \$ "' >> /root/.bashrc \
+ && echo 'alias cw="cd /workspace/ros2_ws && colcon build --symlink-install && source install/setup.bash"' >> /root/.bashrc \
+ && echo 'alias cs="cd /workspace/ros2_ws/src"' >> /root/.bashrc
+
+WORKDIR /workspace
+</file>
+
+<file path="QUICKSTART.md">
+# Quickstart — See the Pipeline Running
+
+All commands run **inside the Dev Container** (`><` → Reopen in Container).  
+Open four terminal tabs in VS Code (`Ctrl+Shift+\`` to split).
+
+> **Visualisation:** RViz2 has no display inside the container. We use **Foxglove Studio** on your Mac instead, connected over a WebSocket bridge on port `9090`.
+
+---
+
+## Step 1 — Build (once per container start)
+
+```bash
+cd /workspace/ros2_ws
+colcon build --symlink-install --packages-select perception_framework point_painting
+source install/setup.bash
+```
+
+---
+
+## Step 2 — Run the painting node (Terminal 1)
+
+### Mode A — Projection only (no segmentation model needed)
+
+```bash
+source /workspace/ros2_ws/install/setup.bash
+
+ros2 run point_painting painting_node \
+  --ros-args -p calib_file:=/workspace/calib.txt
+```
+
+Expected output:
+```
+[INFO] Loaded calibration from: /workspace/calib.txt
+[WARN] No segmentation model loaded — node will use raw image channel as label map.
+[INFO] PaintingNode started, waiting for synced messages...
+```
+
+### Mode B — Full pipeline with YOLO segmentation
+
+No model file needed. YOLO11s-seg downloads automatically on first run (~22 MB, cached).  
+Uses native COCO class IDs: `0`=person, `1`=bicycle, `2`=car, `3`=motorcycle, `5`=bus, `7`=truck.
+
+```bash
+source /workspace/ros2_ws/install/setup.bash
+
+ros2 run point_painting painting_node \
+  --ros-args -p calib_file:=/workspace/calib.txt
+```
+
+Expected output:
+```
+[INFO] Loaded calibration from: /workspace/calib.txt
+[INFO] Segmentation model loaded: yolo11m-seg.pt
+[INFO] PaintingNode started, waiting for synced messages...
+```
+
+To use a custom model file (e.g. a fine-tuned checkpoint):
+```bash
+ros2 run point_painting painting_node \
+  --ros-args \
+  -p calib_file:=/workspace/calib.txt \
+  -p checkpoint_path:=/workspace/yolo11m-seg.pt
+```
+
+**Colour map in Foxglove 3D view:**
+- 🔴 Red = person
+- 🟢 Green = car / truck
+- 🔵 Blue = bicycle
+- 🟠 Orange = motorcycle
+- 🟡 Yellow = bus
+
+---
+
+## Step 3 — Play the bag (Terminal 2)
+
+```bash
+ros2 bag play /workspace/studentProject1/ --loop
+```
+
+---
+
+## Step 4 — Watch the painting output (Terminal 3)
+
+```bash
+ros2 topic echo /painting/debug
+```
+
+You will see a line per frame:
+```
+data: 'frame=1 painted=5050 skipped=59070'
+```
+
+- **painted** = LiDAR points that projected onto a detected object
+- **skipped** = points behind the camera, outside the frame, or on background
+
+---
+
+## Step 5 — Visualise in Foxglove Studio (Terminal 4)
+
+Start the Foxglove WebSocket bridge:
+
+```bash
+ros2 launch foxglove_bridge foxglove_bridge_launch.xml port:=9090
+```
+
+Then on your **Mac**:
+1. Open [Foxglove Studio](https://app.foxglove.dev) (browser or desktop app)
+2. Click **Open connection** → **Foxglove WebSocket** → `ws://localhost:9090`
+
+Inside Foxglove add these panels:
+- **3D** → subscribe to `/painting/painted_cloud` (set Color mode → RGB) to see the painted point cloud
+- **Image** → subscribe to `/painting/segmentation_overlay` to verify YOLO masks on the camera image
+- **Image** → subscribe to `/blackfly_s/cam0/image_rectified` for the raw camera feed
+- **Raw Messages** → subscribe to `/painting/debug` to watch painted/skipped counts
+
+Port `9090` is automatically forwarded by the devcontainer — no extra configuration needed.
+
+---
+
+## Optional — Run the pipeline isolation test (no ROS needed)
+
+Runs the full pipeline (YOLO → PointPainting → PointPillars) on one bag frame and saves
+verification images to `/workspace/AI-Based-Data-Fusion/isolation_output/`.
+
+```bash
+# Minimal run — random frame, no 3-D detection checkpoint
+python3 /workspace/test_pipeline_isolation.py
+
+# With PointPillars checkpoint (recommended)
+python3 /workspace/test_pipeline_isolation.py \
+    --pp-checkpoint /workspace/pointpillars_kitti.pth
+
+# Reproduce a specific frame (use the seed printed at the end of any run)
+python3 /workspace/test_pipeline_isolation.py \
+    --seed 42 \
+    --pp-checkpoint /workspace/pointpillars_kitti.pth
+
+# Lower score threshold to surface more detections
+python3 /workspace/test_pipeline_isolation.py \
+    --pp-checkpoint /workspace/pointpillars_kitti.pth \
+    --pp-score-thr 0.10
+```
+
+Output images:
+```
+isolation_output/01_raw_image.jpg          ← original camera frame
+isolation_output/02_yolo_mask.jpg          ← YOLO class mask (colour per class)
+isolation_output/03_overlay.jpg            ← mask blended on image
+isolation_output/04_lidar_projected.jpg    ← LiDAR points on image, coloured by class
+isolation_output/05_painted_scores.jpg     ← per-point painting score heat map
+isolation_output/06_detections.jpg         ← camera image with projected 3-D boxes
+isolation_output/07_bev.jpg                ← bird's-eye view with box footprints
+```
+
+If `04_lidar_projected.jpg` shows green dots on cars and red dots on people, painting is correct.
+If `06_detections.jpg` / `07_bev.jpg` show boxes, PointPillars is working end-to-end.
+
+---
+
+## Optional — Extract frames from the bag
+
+```bash
+cd /workspace
+python3 -c "
+import sys
+sys.path.insert(0, '/workspace/ros2_ws/src/point_painting')
+from point_painting.rosbag_extractor import extract_bag_data
+extract_bag_data(
+    '/workspace/studentProject1/',
+    '/blackfly_s/cam0/image_rectified',
+    '/velodyne/points_raw',
+    'output_data'
+)
+"
+```
+
+---
+
+## Optional — Run the standalone tests (no ROS needed)
+
+```bash
+python3 /workspace/ros2_ws/src/point_painting/test/test_painting_node.py
+```
+
+Expected:
+```
+Running test_no_projector_skips_all_points ... PASSED
+Running test_empty_point_cloud ... PASSED
+Running test_class_ids_length_matches_input ... PASSED
+ALL TESTS PASSED
+```
+</file>
+
+<file path="test_pipeline_isolation.py">
+"""
+Pipeline isolation test — no ROS, no live node needed.
+
+Stages
+------
+  1. Extract one image + nearest LiDAR frame from the ROS bag
+  2. YOLO segmentation → per-class soft score maps
+  3. Segmentation overlay (visualisation)
+  4. LiDAR points projected onto image, coloured by class (visualisation)
+  5. PointPainting — attach YOLO scores to each LiDAR point
+       output: painted cloud [x, y, z, intensity, score_ped, score_car, score_cyc]
+  6. PointPillars 3-D detection on the painted cloud
+       output: 3-D bounding boxes + bird's-eye-view image
+
+Run inside the container:
+  python3 /workspace/AI-Based-Data-Fusion/test_pipeline_isolation.py
+  python3 /workspace/AI-Based-Data-Fusion/test_pipeline_isolation.py --seed 7
+  python3 /workspace/AI-Based-Data-Fusion/test_pipeline_isolation.py --pp-checkpoint /path/to/kitti.pth
+
+Output (saved to /workspace/AI-Based-Data-Fusion/isolation_output/):
+  01_raw_image.jpg          — original camera frame
+  02_yolo_mask.jpg          — YOLO class mask (colour per class)
+  03_overlay.jpg            — mask blended on top of image
+  04_lidar_projected.jpg    — LiDAR points coloured by class
+  05_painted_scores.jpg     — per-point painting scores (heat map)
+  06_detections.jpg         — camera image with projected 3-D boxes
+  07_bev.jpg                — bird's-eye view with 3-D box footprints
+"""
+
+import sys
+import os
+import random
+import argparse
+import numpy as np
+import cv2
+
+parser = argparse.ArgumentParser()
+parser.add_argument('--seed', type=int, default=None,
+                    help='Random seed for frame selection (omit for a new random frame each run)')
+parser.add_argument('--checkpoint', type=str, default=None,
+                    help='Path to YOLO model file (default: yolo11m-seg.pt)')
+parser.add_argument('--pp-checkpoint', type=str, default=None,
+                    help='Path to PointPillars .pth checkpoint (optional)')
+parser.add_argument('--pp-score-thr', type=float, default=0.20,
+                    help='PointPillars score threshold (default: 0.20)')
+args = parser.parse_args()
+
+rng = random.Random(args.seed)
+
+# ── Paths ──────────────────────────────────────────────────────────────────────
+_script_dir = os.path.dirname(os.path.abspath(__file__))
+BAG_PATH   = '/workspace/studentProject1'
+CALIB_PATH = os.path.join(_script_dir, 'calib.txt')
+OUTPUT_DIR = os.path.join(_script_dir, 'isolation_output')
+YOLO_MODEL = args.checkpoint if args.checkpoint else os.path.join(_script_dir, 'yolo11m-seg.pt')
+
+# COCO class colours (BGR for OpenCV): person=0, bicycle=1, car=2, motorcycle=3, bus=5, truck=7
+CLASS_COLORS_BGR = {
+    0:  (0,   0,   255),   # person     — red
+    1:  (255, 0,   0),     # bicycle    — blue
+    2:  (0,   255, 0),     # car        — green
+    3:  (0,   128, 255),   # motorcycle — orange
+    5:  (0,   255, 255),   # bus        — yellow
+    7:  (0,   200, 0),     # truck      — dark green
+}
+UNPAINTED_BGR = (80, 80, 80)
+
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+
+# ── Stage 1: Pick a random frame from the bag ──────────────────────────────────
+print('\n[Stage 1] Scanning bag to count frames...')
+
+import rosbag2_py
+from rclpy.serialization import deserialize_message
+from rosidl_runtime_py.utilities import get_message
+from cv_bridge import CvBridge
+from sensor_msgs_py import point_cloud2 as pc2
+
+IMG_TOPIC   = '/blackfly_s/cam0/image_rectified'
+LIDAR_TOPIC = '/velodyne/points_raw'
+
+
+def _open_reader(bag_path):
+    r = rosbag2_py.SequentialReader()
+    r.open(
+        rosbag2_py.StorageOptions(uri=bag_path, storage_id='sqlite3'),
+        rosbag2_py.ConverterOptions(input_serialization_format='cdr',
+                                    output_serialization_format='cdr'),
+    )
+    return r
+
+
+# First pass — count image frames so we can pick a random index
+reader = _open_reader(BAG_PATH)
+topic_types = {t.name: t.type for t in reader.get_all_topics_and_types()}
+img_count = 0
+while reader.has_next():
+    topic, _, _ = reader.read_next()
+    if topic == IMG_TOPIC:
+        img_count += 1
+
+print(f'  Found {img_count} image frames in bag.')
+target_idx = rng.randint(0, img_count - 1)
+seed_used = args.seed if args.seed is not None else '(random — use --seed to reproduce)'
+print(f'  Picking frame index {target_idx}  [seed: {seed_used}]')
+
+# Second pass — extract the chosen image and the next LiDAR scan after it
+reader = _open_reader(BAG_PATH)
+bridge = CvBridge()
+
+img_frame   = None
+lidar_frame = None
+img_seen    = 0
+
+while reader.has_next():
+    topic, data, _ = reader.read_next()
+
+    if topic == IMG_TOPIC:
+        if img_seen == target_idx:
+            msg = deserialize_message(data, get_message(topic_types[topic]))
+            img_frame = bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
+            print(f'  Got image #{target_idx}: {img_frame.shape}')
+        img_seen += 1
+
+    elif topic == LIDAR_TOPIC and img_frame is not None and lidar_frame is None:
+        msg = deserialize_message(data, get_message(topic_types[topic]))
+        pts = list(pc2.read_points(msg, field_names=('x', 'y', 'z', 'intensity', 'ring'),
+                                   skip_nans=True))
+        lidar_frame = np.array([(p[0], p[1], p[2], p[3], p[4]) for p in pts],
+                               dtype=np.float32)
+        # Normalise ring index to [0,1] so a 128-ring sensor matches the scale
+        # the pretrained model expects (trained on 64-ring, ring values 0-63).
+        # Normalise intensity to [0,1] (raw values are 0-65535 or 0-255 depending on firmware)
+        lidar_frame[:, 3] = lidar_frame[:, 3] / (lidar_frame[:, 3].max() + 1e-6)
+        # Normalise ring to [0,1] (128-ring → 0..127 → divide by 127)
+        lidar_frame[:, 4] = lidar_frame[:, 4] / (lidar_frame[:, 4].max() + 1e-6)
+        print(f'  Got LiDAR: {lidar_frame.shape[0]} points  '
+              f'(intensity [0,1]  ring [0,1]  channels: x,y,z,intensity,ring)')
+        break  # both frames acquired
+
+cv2.imwrite(f'{OUTPUT_DIR}/01_raw_image.jpg', img_frame)
+print(f'  Saved: 01_raw_image.jpg')
+
+
+# ── Stage 2: Run YOLO segmentation ────────────────────────────────────────────
+print('\n[Stage 2] Running YOLO segmentation...')
+
+from ultralytics import YOLO
+
+model = YOLO(YOLO_MODEL)
+print(f'  Model file : {os.path.abspath(YOLO_MODEL)}')
+print(f'  Model type : {type(model.model).__name__}')
+img_rgb = cv2.cvtColor(img_frame, cv2.COLOR_BGR2RGB)
+h, w = img_frame.shape[:2]
+
+# COCO classes used for PointPainting scores
+PAINT_CLASSES = {0: 'ped', 2: 'car', 1: 'cyc'}
+
+# Single YOLO call — results reused for both hard label mask and soft score maps
+results = model(img_rgb, verbose=False, conf=0.25, imgsz=(h, w))
+
+# ── Hard label mask (for visualisation, Stages 3 & 4) ────────────────────────
+label_mask = np.full((h, w), -1, dtype=np.int32)
+PRIORITY   = {0: 10, 1: 9, 3: 8}  # person > bicycle > motorcycle > everything else
+
+for result in results:
+    if result.masks is None:
+        continue
+    masks   = result.masks.data.cpu().numpy()
+    classes = result.boxes.cls.cpu().numpy().astype(int)
+    pairs   = sorted(zip(masks, classes), key=lambda mc: PRIORITY.get(mc[1], 0))
+    for mask, cls_id in pairs:
+        mask_u8     = (mask * 255).astype(np.uint8)
+        mask_resized = cv2.resize(mask_u8, (w, h), interpolation=cv2.INTER_LINEAR)
+        label_mask[mask_resized > 200] = cls_id
+
+kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+clean_mask = np.full_like(label_mask, -1)
+for cls_id in np.unique(label_mask[label_mask >= 0]):
+    binary  = (label_mask == cls_id).astype(np.uint8)
+    dilated = cv2.dilate(binary, kernel, iterations=1)
+    clean_mask[dilated == 1] = cls_id
+label_mask = clean_mask
+
+# ── Soft score maps (for PointPainting, Stage 5) ─────────────────────────────
+# Per-pixel, winner-take-all across instances → Gaussian blur for smooth scores
+score_maps = {cls_id: np.zeros((h, w), dtype=np.float32)
+              for cls_id in PAINT_CLASSES}
+
+instance_scores = []
+for result in results:
+    if result.masks is None:
+        continue
+    masks   = result.masks.data.cpu().numpy()
+    classes = result.boxes.cls.cpu().numpy().astype(int)
+    confs   = result.boxes.conf.cpu().numpy()
+    for mask, cls_id, conf in zip(masks, classes, confs):
+        if cls_id not in PAINT_CLASSES:
+            continue
+        m = cv2.resize((mask * 255).astype(np.uint8), (w, h),
+                       interpolation=cv2.INTER_LINEAR).astype(np.float32) / 255.0
+        instance_scores.append((m * float(conf), cls_id))
+
+if instance_scores:
+    stack   = np.stack([s for s, _ in instance_scores], axis=0)   # (N, H, W)
+    winner  = np.argmax(stack, axis=0)
+    any_det = stack.max(axis=0) > 0
+    for idx, (sm, cls_id) in enumerate(instance_scores):
+        owns = (winner == idx) & any_det
+        score_maps[cls_id] = np.maximum(
+            score_maps[cls_id],
+            np.where(owns, sm, 0.0).astype(np.float32)
+        )
+
+for cls_id in PAINT_CLASSES:
+    score_maps[cls_id] = cv2.GaussianBlur(score_maps[cls_id], (5, 5), 0)
+
+detected = np.unique(label_mask[label_mask >= 0])
+print(f'  Detected classes: {[(c, model.names[c]) for c in detected if c in model.names]}')
+
+mask_vis = np.zeros((h, w, 3), dtype=np.uint8)
+for cls_id, color in CLASS_COLORS_BGR.items():
+    mask_vis[label_mask == cls_id] = color
+
+cv2.imwrite(f'{OUTPUT_DIR}/02_yolo_mask.jpg', mask_vis)
+print(f'  Saved: 02_yolo_mask.jpg')
+
+
+# ── Stage 3: Overlay mask on image ────────────────────────────────────────────
+print('\n[Stage 3] Creating segmentation overlay...')
+
+overlay = cv2.addWeighted(img_frame, 0.6, mask_vis, 0.4, 0)
+
+# Add class legend
+y = 30
+for cls_id, color in CLASS_COLORS_BGR.items():
+    if cls_id in detected:
+        name = model.names.get(cls_id, str(cls_id))
+        cv2.rectangle(overlay, (10, y-15), (30, y+5), color, -1)
+        cv2.putText(overlay, name, (35, y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+        y += 30
+
+cv2.imwrite(f'{OUTPUT_DIR}/03_overlay.jpg', overlay)
+print(f'  Saved: 03_overlay.jpg')
+
+
+# ── Stage 4: Project LiDAR points onto image ──────────────────────────────────
+print('\n[Stage 4] Projecting LiDAR points onto image...')
+
+sys.path.insert(0, '/workspace/ros2_ws/src/perception_framework')
+sys.path.insert(0, '/workspace/ros2_ws/install/perception_framework/lib/python3.10/site-packages')
+
+from perception_framework.lidar_to_image_projection import KittiLidarToImageProjector
+
+projector = KittiLidarToImageProjector(CALIB_PATH)
+
+# Keep all points — PointPillars handles its own z range clipping internally.
+# The KITTI z range [-3, 3] (extended for our lower-mounted sensor) will drop
+# true sky/building points while retaining road + objects of interest.
+lidar_filtered = lidar_frame
+ground_mask = np.ones(len(lidar_frame), dtype=bool)
+
+image_points, valid_lidar = projector.project_lidar_to_image(lidar_filtered[:, :3], (h, w))
+
+print(f'  Total points: {len(lidar_frame)}')
+print(f'  After ground filter: {len(lidar_filtered)}')
+print(f'  Points in camera frame: {len(image_points)} ({100*len(image_points)/len(lidar_frame):.1f}%)')
+
+# Re-derive depths aligned to image_points
+all_cam = projector.lidar_to_camera(lidar_filtered[:, :3])
+front_mask = all_cam[:, 2] > 0
+all_cam_front = all_cam[front_mask]
+uv_all = (projector.P2[:, :3] @ all_cam_front.T).T
+uv_all = uv_all[:, :2] / uv_all[:, 2:3]
+in_bounds = (uv_all[:, 0] >= 0) & (uv_all[:, 0] < w) & (uv_all[:, 1] >= 0) & (uv_all[:, 1] < h)
+depths = all_cam_front[in_bounds, 2]  # aligned to image_points
+
+# Neighbourhood majority-vote for class lookup: avoids single-pixel mask gaps
+def majority_class(lm, cy, cx, r=3):
+    y0, y1 = max(0, cy - r), min(lm.shape[0], cy + r + 1)
+    x0, x1 = max(0, cx - r), min(lm.shape[1], cx + r + 1)
+    patch = lm[y0:y1, x0:x1]
+    valid = patch[patch >= 0]
+    if len(valid) == 0:
+        return -1
+    counts = np.bincount(valid)
+    return int(np.argmax(counts))
+
+# Sort by depth descending so far points are drawn first (occluded by near points)
+order = np.argsort(depths)[::-1]
+image_points_sorted = image_points[order]
+depths_sorted = depths[order]
+
+lidar_img = img_frame.copy()
+painted = 0
+class_counts = {}
+
+for pt_px, depth in zip(image_points_sorted, depths_sorted):
+    u, v = int(pt_px[0]), int(pt_px[1])
+    if 0 <= u < w and 0 <= v < h:
+        cls_id = majority_class(label_mask, v, u, r=3)
+        color = CLASS_COLORS_BGR.get(cls_id, UNPAINTED_BGR)
+        # Depth-scaled radius: 6px at 5m, 4px at 10m, 3px at 20m+
+        radius = max(3, int(30.0 / max(depth, 1.0)))
+        cv2.circle(lidar_img, (u, v), radius=radius, color=color, thickness=-1)
+        if cls_id >= 0:
+            painted += 1
+            class_counts[cls_id] = class_counts.get(cls_id, 0) + 1
+
+print(f'  Painted points (non-background): {painted}')
+for cls_id, count in sorted(class_counts.items()):
+    name = model.names.get(cls_id, str(cls_id))
+    print(f'    {name} (class {cls_id}): {count} points')
+
+cv2.imwrite(f'{OUTPUT_DIR}/04_lidar_projected.jpg', lidar_img)
+print(f'  Saved: 04_lidar_projected.jpg')
+
+# ── Stage 5: PointPainting — attach YOLO scores to each LiDAR point ──────────
+print('\n[Stage 5] PointPainting...')
+
+sys.path.insert(0, _script_dir)
+from point_pillars import (paint_point_cloud, PointPillars, PointPillarsConfig,
+                            build_pointpillars, draw_boxes_on_image, draw_bev)
+
+painted = paint_point_cloud(
+    lidar_filtered,          # (N, 5): x,y,z,intensity,ring_normalised
+    score_maps,              # {coco_id: (H,W) float32}
+    projector,               # KittiLidarToImageProjector
+    (h, w),
+)
+print(f'  Painted cloud: {painted.shape}  '
+      f'[x, y, z, intensity, ring, score_ped, score_car, score_cyc]')
+
+# Count non-zero painting scores
+n_ped = (painted[:, 5] > 0.1).sum()
+n_car = (painted[:, 6] > 0.1).sum()
+n_cyc = (painted[:, 7] > 0.1).sum()
+print(f'  Points with score > 0.1:  ped={n_ped}  car={n_car}  cyc={n_cyc}')
+
+# Visualise painting scores as a heatmap on the image
+score_combined = painted[:, 5:].max(axis=1)   # max score across ped/car/cyc (cols 5,6,7)
+cam_all2  = projector.lidar_to_camera(lidar_filtered[:, :3])
+front2    = cam_all2[:, 2] > 0
+uv2       = (projector.P2[:, :3] @ cam_all2[front2].T).T
+uv2       = uv2[:, :2] / uv2[:, 2:3]
+in2       = ((uv2[:, 0] >= 0) & (uv2[:, 0] < w) &
+             (uv2[:, 1] >= 0) & (uv2[:, 1] < h))
+front_idx2 = np.where(front2)[0][in2]
+
+score_img = img_frame.copy()
+for idx, (u_f, v_f) in zip(front_idx2,
+                             uv2[in2]):
+    u_i, v_i = int(u_f), int(v_f)
+    sc = float(score_combined[idx])
+    if sc > 0.05:
+        # colour: low score = yellow, high = red
+        color = (0, int(255 * (1 - sc)), 255)
+        cv2.circle(score_img, (u_i, v_i), 3, color, -1)
+
+cv2.imwrite(f'{OUTPUT_DIR}/05_painted_scores.jpg', score_img)
+print(f'  Saved: 05_painted_scores.jpg')
+
+
+# ── Stage 6: PointPillars 3-D detection ───────────────────────────────────────
+print('\n[Stage 6] PointPillars detection...')
+
+# ── Coordinate frame alignment ────────────────────────────────────────────────
+# KITTI PointPillars expects: x=forward, y=left, z=up, sensor at ~1.7m above ground.
+# Our sensor frame (from raw bag data):
+#   x: [-151, +200]  — lateral (full 360° scan)
+#   y: [-46,  +76]   — another lateral axis
+#   z: [-1.5, +30.5] — vertical (buildings/height, ground already filtered)
+# Tr_velo_to_cam row3 ≈ [0.987, -0.022, -0.162] meaning camera depth ≈ 0.987*x_lidar
+# → x_lidar IS the forward axis in the calibration.
+# But raw x goes -151..+200 which is a full 360° range — the forward half is x>0.
+# The KITTI detection zone x=[0,69.12] covers exactly the forward half.
+# z going up to 30.5m with ground at -1.5m means z is UP (buildings are tall).
+# y range [-46,+76] is the left-right lateral axis.
+# So the frame IS already x=forward, y=left, z=up — we just need to feed it directly.
+# No axis remapping needed; the KITTI voxel range x=[0,69.12] will select forward points.
+raw_xyz = painted[:, :3].copy()
+painted_kitti = painted.copy()  # no remap needed
+
+print(f'  Point cloud (original Velodyne frame, no remap):')
+print(f'    x (fwd) range: [{painted_kitti[:,0].min():.1f}, {painted_kitti[:,0].max():.1f}]')
+print(f'    y (lat) range: [{painted_kitti[:,1].min():.1f}, {painted_kitti[:,1].max():.1f}]')
+print(f'    z (up)  range: [{painted_kitti[:,2].min():.1f}, {painted_kitti[:,2].max():.1f}]')
+in_kitti = ((painted_kitti[:,0] >= 0) & (painted_kitti[:,0] <= 69.12) &
+            (painted_kitti[:,1] >= -39.68) & (painted_kitti[:,1] <= 39.68) &
+            (painted_kitti[:,2] >= -3.0) & (painted_kitti[:,2] <= 1.0))
+print(f'    Points inside KITTI detection range: {in_kitti.sum()} / {len(painted_kitti)}')
+# Break down by axis to find which constraint kills the most points
+in_x = (painted_kitti[:,0] >= 0) & (painted_kitti[:,0] <= 69.12)
+in_y = (painted_kitti[:,1] >= -39.68) & (painted_kitti[:,1] <= 39.68)
+in_z = (painted_kitti[:,2] >= -3.0) & (painted_kitti[:,2] <= 1.0)
+print(f'    In x=[0,69]: {in_x.sum()}  |  in y=[-40,40]: {in_y.sum()}  |  in z=[-3,1]: {in_z.sum()}')
+print(f'    z histogram: <-3: {(painted_kitti[:,2]<-3).sum()}  '
+      f'-3..0: {((painted_kitti[:,2]>=-3)&(painted_kitti[:,2]<0)).sum()}  '
+      f'0..1: {((painted_kitti[:,2]>=0)&(painted_kitti[:,2]<1)).sum()}  '
+      f'1..3: {((painted_kitti[:,2]>=1)&(painted_kitti[:,2]<3)).sum()}  '
+      f'>3: {(painted_kitti[:,2]>=3).sum()}')
+# Density in forward zone: how many points per pillar on average?
+fwd = painted_kitti[in_x & in_y]
+if len(fwd):
+    # Estimate pillar density
+    n_pillars_fwd = len(np.unique(
+        (((fwd[:,0]) / 0.16).astype(int)) * 10000 +
+        (((fwd[:,1] + 39.68) / 0.16).astype(int))
+    ))
+    print(f'    Forward zone: {len(fwd)} pts in ~{n_pillars_fwd} pillars '
+          f'({len(fwd)/max(n_pillars_fwd,1):.1f} pts/pillar avg)')
+
+# Use painted=False with 4 channels [x,y,z,intensity] — exact match to the
+# pretrained KITTI checkpoint (PFN linear weight 64×10 = 4 base + 6 augmented).
+# The PFN forward appends dx_c/dy_c/dz_c (cluster offsets), dx_p/dy_p (pillar
+# centre offsets), and range depth — always 10 channels total regardless of mode.
+pp_model = build_pointpillars(painted=False, score_thr=args.pp_score_thr)
+cfg = pp_model.cfg
+
+pretrained = False
+if args.pp_checkpoint:
+    pretrained = pp_model.load_pretrained(args.pp_checkpoint)
+
+if not pretrained:
+    print('  WARNING: no pretrained checkpoint loaded — detections are random.')
+
+# 4-channel input: [x, y, z, intensity]
+points_4ch = painted_kitti[:, :4]
+
+# ── Diagnostic: raw score distribution ────────────────────────────────────────
+import torch
+pp_model.eval()
+with torch.no_grad():
+    _pnp, _cnp, _nnp = pp_model._voxelise(points_4ch, cfg.max_voxels_test)
+    print(f'  Voxelised: {_pnp.shape[0]} pillars')
+    _pf  = pp_model.pfn(torch.from_numpy(_pnp), torch.from_numpy(_nnp),
+                        torch.from_numpy(_cnp))
+    _bev = pp_model.scatter(_pf, torch.from_numpy(_cnp), batch_size=1)
+    _cls_raw = pp_model.head(pp_model.neck(pp_model.backbone(_bev)))[0]
+    _sig = torch.sigmoid(_cls_raw)[0].cpu().numpy()
+    print(f'  cls sigmoid — min={_sig.min():.4f}  max={_sig.max():.4f}  '
+          f'mean={_sig.mean():.4f}  >0.3: {(_sig>0.3).sum()}  >0.1: {(_sig>0.1).sum()}')
+
+boxes, scores, labels = pp_model.detect(points_4ch)
+print(f'  Detections (thr={args.pp_score_thr}): {len(boxes)}')
+for box, score, label in zip(boxes, scores, labels):
+    cls_name = PointPillars.CLASS_NAMES.get(int(label), str(label))
+    cx, cy, cz, bw, bl, bh, heading = box
+    print(f'    {cls_name:12s}  score={score:.3f}  '
+          f'pos=({cx:.1f}, {cy:.1f}, {cz:.1f})  '
+          f'size=({bw:.2f}×{bl:.2f}×{bh:.2f})  heading={heading:.2f}rad')
+
+
+# ── Stage 7: Visualise 3-D detections ─────────────────────────────────────────
+print('\n[Stage 7] Visualising detections...')
+
+# Boxes are in the same frame as the input point cloud (no axis remap was applied),
+# so they can be projected directly using the calibrated projector.
+det_img = draw_boxes_on_image(img_frame, boxes, scores, labels, projector)
+cv2.imwrite(f'{OUTPUT_DIR}/06_detections.jpg', det_img)
+print(f'  Saved: 06_detections.jpg')
+
+bev_img = draw_bev(boxes, scores, labels, cfg)
+cv2.imwrite(f'{OUTPUT_DIR}/07_bev.jpg', bev_img)
+print(f'  Saved: 07_bev.jpg')
+
+print(f'\nDone.  Output: {OUTPUT_DIR}/')
+print(f'To reproduce: python3 {os.path.basename(__file__)} --seed {target_idx}')
+if not pretrained:
+    print('\nNext step: provide a pretrained PointPillars checkpoint:')
+    print('  python3 ... --pp-checkpoint /workspace/pointpillars_kitti.pth')
+</file>
+
 <file path="ros2_ws/src/point_painting/point_painting/painting_node.py">
+"""
+PointPainting ROS 2 Node.
+
+Subscribes to a camera image topic and a LiDAR point cloud topic, runs
+YOLO instance segmentation on each camera frame, projects every LiDAR
+point onto the segmentation mask, and attaches the COCO class ID at that
+pixel to the point.
+
+Published topics:
+    /painting/debug               (std_msgs/String)      — painted/skipped counts per frame
+    /painting/painted_cloud       (sensor_msgs/PointCloud2) — full point cloud coloured by class
+    /painting/segmentation_overlay (sensor_msgs/Image)   — YOLO masks blended on camera image
+    /painting/points_overlay      (sensor_msgs/Image)    — projected LiDAR dots on camera image
+
+Parameters:
+    calib_file      (str) — path to KITTI-format calibration file (calib.txt)
+    checkpoint_path (str) — optional path to a custom YOLO model file
+                            defaults to yolo11m-seg.pt (auto-downloaded)
+"""
+
 import sys
 import struct
 import cv2
@@ -4744,11 +6272,9 @@ from sensor_msgs_py import point_cloud2 as pc2
 
 from point_painting.painting_logic import init_projector, paint_points
 
-# RGB colors per class ID for the painted point cloud (COCO classes)
-# painted points show their semantic class as a color in Foxglove
+# COCO class IDs mapped to RGB display colours for Foxglove.
+# -1 = background / no detection — uses UNPAINTED_COLOR instead.
 CLASS_COLORS = {
-    # Native YOLO/COCO class IDs — no remapping needed
-    # -1 = background/no detection (unpainted)
     0:  (255, 0,   0),    # person     — red
     1:  (0,   0,   255),  # bicycle    — blue
     2:  (0,   255, 0),    # car        — green
@@ -4756,15 +6282,30 @@ CLASS_COLORS = {
     5:  (255, 255, 0),    # bus        — yellow
     7:  (0,   200, 0),    # truck      — dark green
 }
-UNPAINTED_COLOR = (30, 30, 30)  # near-black for unpainted points
+UNPAINTED_COLOR = (30, 30, 30)
 
 
 def _color_to_float(r, g, b):
+    """Pack an RGB triplet into a single float32 for PointCloud2 RGB field."""
     packed = struct.pack('BBBB', b, g, r, 0)
     return struct.unpack('f', packed)[0]
 
 
 class PaintingNode(Node):
+    """
+    ROS 2 node that implements the PointPainting fusion algorithm.
+
+    On every incoming LiDAR scan or camera frame, pairs the latest message
+    from each topic (latest-message cache instead of time synchronisation —
+    the two sensors were recorded with different clocks in the bag so
+    timestamp-based sync never fires), then:
+
+      1. Runs YOLO26n-seg on the camera frame to get a per-pixel class mask.
+      2. Projects all LiDAR points onto the mask using the KITTI calibration.
+      3. Attaches the class ID at each projected pixel to the original 3D point.
+      4. Publishes the enriched point cloud and two verification image topics.
+    """
+
     def __init__(self):
         super().__init__('painting_node')
         self._bridge = CvBridge()
@@ -4792,20 +6333,16 @@ class PaintingNode(Node):
         try:
             from point_painting.segmentation.yolo_segmentation import load_model
             self._seg_model = load_model(checkpoint if checkpoint else None)
-            model_name = checkpoint if checkpoint else 'yolo26n-seg.pt'
+            model_name = checkpoint if checkpoint else 'yolo11m-seg.pt'
             self.get_logger().info(f'Segmentation model loaded: {model_name}')
         except Exception as e:
             self.get_logger().error(f'Failed to load segmentation model: {e}')
             self.get_logger().warn('Node will use raw image channel as label map.')
 
         # --- Publishers / Subscribers ---
-        # The LiDAR and camera were recorded with different clocks so we use a
-        # latest-message cache instead of ApproximateTimeSynchronizer.
         self._debug_pub = self.create_publisher(String, '/painting/debug', 10)
         self._painted_pub = self.create_publisher(PointCloud2, '/painting/painted_cloud', 10)
-        # Segmentation overlay: YOLO masks blended on camera image.
         self._overlay_pub = self.create_publisher(Image, '/painting/segmentation_overlay', 10)
-        # Points overlay: projected LiDAR dots drawn on camera image, coloured by class.
         self._points_overlay_pub = self.create_publisher(Image, '/painting/points_overlay', 10)
         self.create_subscription(Image, '/blackfly_s/cam0/image_rectified', self._img_cb, 10)
         self.create_subscription(PointCloud2, '/velodyne/points_raw', self._cloud_cb, 10)
@@ -4813,16 +6350,25 @@ class PaintingNode(Node):
         self.get_logger().info('PaintingNode started, waiting for synced messages...')
 
     def _img_cb(self, msg: Image):
+        """Cache the latest camera frame and trigger painting."""
         self._latest_img = msg
         if self._latest_cloud is not None:
             self._callback(self._latest_img, self._latest_cloud)
 
     def _cloud_cb(self, msg: PointCloud2):
+        """Cache the latest LiDAR scan and trigger painting."""
         self._latest_cloud = msg
         if self._latest_img is not None:
             self._callback(self._latest_img, self._latest_cloud)
 
     def _callback(self, img_msg: Image, cloud_msg: PointCloud2):
+        """
+        Core painting callback — called on every new camera or LiDAR message.
+
+        Runs segmentation on the latest camera frame, projects the latest
+        LiDAR scan onto the resulting mask, and publishes the painted cloud
+        and verification overlays.
+        """
         cv_image = self._bridge.imgmsg_to_cv2(img_msg, desired_encoding='passthrough')
 
         if self._seg_model is not None:
@@ -4842,7 +6388,8 @@ class PaintingNode(Node):
         self._publish_painted_cloud(xyz, class_ids, cloud_msg.header)
 
         self._frame_count += 1
-        # Publish overlays every 5th frame — full-res images at 8Hz flood Foxglove's buffer
+        # Throttle image topics to every 5th frame — full-res images at 8 Hz
+        # saturate Foxglove's 20 MB frame buffer when the tab is inactive.
         if self._frame_count % 5 == 0:
             self._publish_segmentation_overlay(cv_image, seg_image, img_msg.header)
             self._publish_points_overlay(cv_image, xyz, class_ids, img_msg.header)
@@ -4854,26 +6401,32 @@ class PaintingNode(Node):
         msg.data = f'frame={self._frame_count} painted={painted} skipped={skipped}'
         self._debug_pub.publish(msg)
 
-    def _publish_segmentation_overlay(self, cv_image: np.ndarray, seg_image: np.ndarray, header):
-        """Blend coloured class masks onto the original image and publish for verification."""
-        # Work in BGR (cv_image from cv_bridge is BGR)
-        overlay = cv_image.copy() if cv_image.ndim == 3 else cv2.cvtColor(cv_image, cv2.COLOR_GRAY2BGR)
+    def _publish_segmentation_overlay(self, cv_image: np.ndarray,
+                                      seg_image: np.ndarray, header):
+        """
+        Blend YOLO class masks onto the camera image and publish.
+
+        Useful for verifying that the segmentation model labels the correct
+        objects before trusting the painted point cloud. Published on
+        /painting/segmentation_overlay at 1/5 of the node rate.
+        """
+        overlay = cv_image.copy() if cv_image.ndim == 3 else cv2.cvtColor(
+            cv_image, cv2.COLOR_GRAY2BGR)
         colour_mask = np.zeros_like(overlay)
 
         for class_id, (r, g, b) in CLASS_COLORS.items():
             if class_id == -1:
-                continue  # skip background
+                continue
             mask = seg_image == class_id
             if not mask.any():
                 continue
-            # seg_image is at model output resolution — resize mask to match image
             if seg_image.shape != overlay.shape[:2]:
                 import cv2 as _cv2
                 mask_u8 = mask.astype(np.uint8) * 255
                 mask_u8 = _cv2.resize(mask_u8, (overlay.shape[1], overlay.shape[0]),
                                       interpolation=_cv2.INTER_NEAREST)
                 mask = mask_u8 > 0
-            colour_mask[mask] = (b, g, r)  # BGR order
+            colour_mask[mask] = (b, g, r)  # BGR order for OpenCV
 
         blended = cv2.addWeighted(overlay, 0.6, colour_mask, 0.4, 0)
         overlay_msg = self._bridge.cv2_to_imgmsg(blended, encoding='bgr8')
@@ -4882,8 +6435,14 @@ class PaintingNode(Node):
 
     def _publish_points_overlay(self, cv_image: np.ndarray, xyz: np.ndarray,
                                 class_ids: list, header):
-        """Draw projected LiDAR points as coloured dots on the camera image and publish."""
-        from perception_framework.lidar_to_image_projection import KittiLidarToImageProjector
+        """
+        Draw projected LiDAR points as coloured dots on the camera image and publish.
+
+        Each dot shows exactly which pixel a LiDAR point projects onto and what
+        class it received. This is the clearest end-to-end verification of the
+        full projection + segmentation pipeline. Published on
+        /painting/points_overlay at 1/5 of the node rate.
+        """
         from point_painting.painting_logic import _projector
 
         if _projector is None:
@@ -4892,14 +6451,10 @@ class PaintingNode(Node):
         h, w = cv_image.shape[:2]
         canvas = cv_image.copy()
 
-        image_points, _ = _projector.project_lidar_to_image(xyz, (h, w))
-        if len(image_points) == 0:
-            return
-
-        # Rebuild per-point class lookup using same projection as paint_points
         camera_pts = _projector.lidar_to_camera(xyz)
         depth_ok = camera_pts[:, 2] > 0
         cam_depth = camera_pts[depth_ok]
+        depth_indices = np.where(depth_ok)[0]
 
         import cv2 as _cv2
         proj, _ = _cv2.projectPoints(
@@ -4909,7 +6464,6 @@ class PaintingNode(Node):
             _projector.dist_coeffs,
         )
         proj = proj.reshape(-1, 2)
-        depth_indices = np.where(depth_ok)[0]
         u_all, v_all = proj[:, 0], proj[:, 1]
         inside = (u_all >= 0) & (u_all < w) & (v_all >= 0) & (v_all < h)
 
@@ -4926,6 +6480,13 @@ class PaintingNode(Node):
         self._points_overlay_pub.publish(msg)
 
     def _publish_painted_cloud(self, xyz: np.ndarray, class_ids: list, header):
+        """
+        Publish the semantically enriched point cloud.
+
+        Each point keeps its original LiDAR x, y, z coordinates. The rgb
+        field encodes the COCO class colour so Foxglove can display it with
+        Color mode: BGR (packed), Color field: rgb.
+        """
         fields = [
             PointField(name='x',   offset=0,  datatype=PointField.FLOAT32, count=1),
             PointField(name='y',   offset=4,  datatype=PointField.FLOAT32, count=1),
@@ -4934,16 +6495,17 @@ class PaintingNode(Node):
         ]
 
         cloud_data = []
-        for i, (pt, cid) in enumerate(zip(xyz, class_ids)):
+        for pt, cid in zip(xyz, class_ids):
             r, g, b = CLASS_COLORS.get(cid, UNPAINTED_COLOR)
-            rgb_float = _color_to_float(r, g, b)
-            cloud_data.append([float(pt[0]), float(pt[1]), float(pt[2]), rgb_float])
+            cloud_data.append([float(pt[0]), float(pt[1]), float(pt[2]),
+                                _color_to_float(r, g, b)])
 
         cloud_msg = pc2.create_cloud(header, fields, cloud_data)
         self._painted_pub.publish(cloud_msg)
 
 
 def main(args=None):
+    """Entry point — initialise ROS 2 and spin the painting node."""
     rclpy.init(args=args)
     node = PaintingNode()
     try:

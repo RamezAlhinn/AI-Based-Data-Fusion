@@ -70,9 +70,29 @@ def paint_points(points_xyz: np.ndarray, seg_image: np.ndarray):
     u_in = np.clip(u_all[inside].astype(int), 0, w - 1)
     v_in = np.clip(v_all[inside].astype(int), 0, h - 1)
 
-    # Step 5: look up class at each pixel
+    # Step 5: look up class at each pixel and filter by local minimum depth
     class_ids = np.full(n, -1, dtype=int)
-    class_ids[orig_indices] = seg_image[v_in, u_in]
-    painted = int(inside.sum())
+    class_ids_in = seg_image[v_in, u_in].copy()
+
+    # Depth filtering: construct 2D depth map of projected points
+    depths_in = cam_front[inside, 2]
+    depth_map = np.full((h, w), 1000.0, dtype=np.float32)
+    # Sort depths in descending order so that the minimum depth is written last and overwrites larger depths
+    sorted_idx = np.argsort(depths_in)[::-1]
+    depth_map[v_in[sorted_idx], u_in[sorted_idx]] = depths_in[sorted_idx]
+
+    # Perform morphological erosion to propagate local minimum depth
+    kernel = np.ones((7, 7), np.uint8)
+    min_depth_map = cv2.erode(depth_map, kernel)
+
+    # Check depth consistency
+    local_min_depths = min_depth_map[v_in, u_in]
+    depth_valid = depths_in <= local_min_depths + 3.0
+
+    # Invalidate class IDs for points that fail depth verification
+    class_ids_in[~depth_valid] = -1
+
+    class_ids[orig_indices] = class_ids_in
+    painted = int((class_ids >= 0).sum())
 
     return painted, n - painted, class_ids.tolist()
