@@ -41,10 +41,19 @@ def paint_points(points_xyz: np.ndarray, seg_image: np.ndarray):
 
     h, w = seg_image.shape[:2]
 
-    # Step 1: transform all points to camera space (colleague's method)
-    camera_pts = _projector.lidar_to_camera(points_xyz)
+    # Step 1: filter ground points in Velodyne frame (z-up)
+    GROUND_Z_THRESH = -1.5
+    not_ground = points_xyz[:, 2] > GROUND_Z_THRESH
+    not_ground_indices = np.where(not_ground)[0]
+    points_filtered = points_xyz[not_ground]
 
-    # Step 2: keep only points in front of the camera
+    if len(points_filtered) == 0:
+        return 0, n, [-1] * n
+
+    # Step 2: transform points to camera space
+    camera_pts = _projector.lidar_to_camera(points_filtered)
+
+    # Step 3: keep only points in front of the camera
     # (points behind the camera would project to negative depth and cause issues)
     depth_ok = camera_pts[:, 2] > 0
     depth_indices = np.where(depth_ok)[0]
@@ -53,7 +62,7 @@ def paint_points(points_xyz: np.ndarray, seg_image: np.ndarray):
     if len(cam_front) == 0:
         return 0, n, [-1] * n
 
-    # Step 3: project to pixels using colleague's camera matrix
+    # Step 4: project to pixels using camera matrix
     import cv2
     proj, _ = cv2.projectPoints(
         cam_front.astype(np.float64),
@@ -64,17 +73,27 @@ def paint_points(points_xyz: np.ndarray, seg_image: np.ndarray):
     proj = proj.reshape(-1, 2)
     u_all, v_all = proj[:, 0], proj[:, 1]
 
-    # Step 4: keep only points inside the image frame
+    # Step 5: keep only points inside the image frame
     inside = (u_all >= 0) & (u_all < w) & (v_all >= 0) & (v_all < h)
-    orig_indices = depth_indices[inside]
+    orig_indices = not_ground_indices[depth_indices[inside]]
     u_in = np.clip(u_all[inside].astype(int), 0, w - 1)
     v_in = np.clip(v_all[inside].astype(int), 0, h - 1)
 
-    # Step 5: look up class at each pixel and filter by local minimum depth
-    class_ids = np.full(n, -1, dtype=int)
-    class_ids_in = seg_image[v_in, u_in].copy()
+    # Step 6: majority-vote class lookup in a 3px neighborhood
+    def majority_class(lm, cy, cx, r=3):
+        y0, y1 = max(0, cy - r), min(lm.shape[0], cy + r + 1)
+        x0, x1 = max(0, cx - r), min(lm.shape[1], cx + r + 1)
+        patch = lm[y0:y1, x0:x1]
+        valid = patch[patch >= 0]
+        if len(valid) == 0:
+            return -1
+        counts = np.bincount(valid)
+        return int(np.argmax(counts))
 
-    # Depth filtering: construct 2D depth map of projected points
+    class_ids = np.full(n, -1, dtype=int)
+    class_ids_in = np.array([majority_class(seg_image, v, u, r=3) for u, v in zip(u_in, v_in)])
+
+    # Step 7: depth filtering using a 2D local minimum depth map
     depths_in = cam_front[inside, 2]
     depth_map = np.full((h, w), 1000.0, dtype=np.float32)
     # Sort depths in descending order so that the minimum depth is written last and overwrites larger depths

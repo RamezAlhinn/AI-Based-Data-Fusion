@@ -30,18 +30,43 @@ from PIL import Image
 
 def load_model(checkpoint_path: str = None):
     """
-    Load YOLO11m-seg model. Auto-downloads on first use (~42 MB, cached).
+    Load YOLO segmentation model. Auto-downloads if not found.
     Pass checkpoint_path to override with a local file.
     """
     from ultralytics import YOLO
-    model_path = checkpoint_path if checkpoint_path else 'yolo11m-seg.pt'
+    import os
+
+    if checkpoint_path:
+        model_path = checkpoint_path
+    else:
+        # Find model in workspace or default to yolo11n-seg.pt (fastest)
+        possible_paths = [
+            '/workspace/models/yolo11n-seg.pt',
+            '/workspace/models/yolo11m-seg.pt',
+            '/workspace/yolo11n-seg.pt',
+            '/workspace/ros2_ws/yolo11n-seg.pt',
+            os.path.join(os.path.dirname(__file__), '../../../../models/yolo11n-seg.pt'),
+            os.path.join(os.path.dirname(__file__), '../../../../../../models/yolo11n-seg.pt'),
+            os.path.join(os.path.dirname(__file__), '../../../../yolo11n-seg.pt'),
+            os.path.join(os.path.dirname(__file__), '../../../../../../yolo11n-seg.pt'),
+            '/workspace/yolo11m-seg.pt',
+            '/workspace/ros2_ws/yolo11m-seg.pt',
+            'yolo11n-seg.pt'
+        ]
+        model_path = 'yolo11n-seg.pt'
+        for p in possible_paths:
+            if os.path.exists(p):
+                model_path = p
+                break
+
+    print(f"Loading YOLO segmentation model from: {os.path.abspath(model_path)}")
     return YOLO(model_path)
 
 
 def segment_image(model, image: Image.Image) -> np.ndarray:
     """
     Run YOLO instance segmentation on a PIL image.
-    Returns a (H, W) array with native YOLO/COCO class IDs per pixel, 0 = background.
+    Returns a (H, W) array with native YOLO/COCO class IDs per pixel, -1 = background.
 
     COCO class IDs (relevant for driving):
       0=person, 1=bicycle, 2=car, 3=motorcycle, 5=bus, 7=truck
@@ -49,7 +74,8 @@ def segment_image(model, image: Image.Image) -> np.ndarray:
     img_np = np.array(image)
     h, w = img_np.shape[:2]
 
-    results = model(img_np, verbose=False, conf=0.25)
+    # Prevent letterboxing by passing imgsz=(h, w)
+    results = model(img_np, verbose=False, conf=0.25, imgsz=(h, w))
     label_mask = np.full((h, w), -1, dtype=np.int32)  # -1 = background/no detection
 
     # Priority order: vehicles first, vulnerable road users last so they
@@ -66,8 +92,19 @@ def segment_image(model, image: Image.Image) -> np.ndarray:
         pairs = sorted(zip(masks, classes), key=lambda mc: PRIORITY.get(mc[1], 0))
         for mask, cls_id in pairs:
             mask_u8 = (mask * 255).astype(np.uint8)
-            mask_resized = cv2.resize(mask_u8, (w, h), interpolation=cv2.INTER_NEAREST)
-            label_mask[mask_resized > 127] = cls_id
+            # Use bilinear interpolation for cleaner boundaries
+            mask_resized = cv2.resize(mask_u8, (w, h), interpolation=cv2.INTER_LINEAR)
+            # Tighter threshold (200) to prevent blur bleed
+            label_mask[mask_resized > 200] = cls_id
+
+    # Apply dilation to close interior holes in masks
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+    clean_mask = np.full_like(label_mask, -1)
+    for cls_id in np.unique(label_mask[label_mask >= 0]):
+        binary  = (label_mask == cls_id).astype(np.uint8)
+        dilated = cv2.dilate(binary, kernel, iterations=1)
+        clean_mask[dilated == 1] = cls_id
+    label_mask = clean_mask
 
     return label_mask
 

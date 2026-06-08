@@ -17,7 +17,7 @@ sys.path.insert(0, '/workspace')
 from point_pillars import build_pointpillars, PointPillarsConfig
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--checkpoint', default='/workspace/pointpillars_kitti_3class.pth')
+parser.add_argument('--checkpoint', default='/workspace/models/pointpillars_kitti_3class.pth')
 parser.add_argument('--isolation-output', default='/workspace/isolation_output')
 args = parser.parse_args()
 

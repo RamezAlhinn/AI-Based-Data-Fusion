@@ -8,7 +8,7 @@ import sys
 import torch
 
 path = sys.argv[1] if len(sys.argv) > 1 else \
-       '/workspace/AI-Based-Data-Fusion/pointpillars_kitti_3class.pth'
+       '/workspace/models/pointpillars_kitti_3class.pth'
 
 ckpt = torch.load(path, map_location='cpu', weights_only=False)
 sd   = ckpt.get('state_dict', ckpt) if isinstance(ckpt, dict) else ckpt

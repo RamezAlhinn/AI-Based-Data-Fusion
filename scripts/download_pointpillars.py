@@ -16,7 +16,8 @@ CHECKPOINT_URL = (
 )
 
 SAVE_PATH = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)),
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "models",
     "pointpillars_kitti_3class.pth"
 )
 
@@ -42,5 +43,5 @@ if __name__ == '__main__':
         print(f'\nDone.  Saved to: {SAVE_PATH}')
 
     print('\nRun the pipeline with:')
-    print(f'  python3 /workspace/AI-Based-Data-Fusion/test_pipeline_isolation.py '
+    print(f'  python3 /workspace/test_pipeline_isolation.py '
           f'--seed 7 --pp-checkpoint {SAVE_PATH}')

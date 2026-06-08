@@ -128,32 +128,32 @@ python3 /workspace/test_pipeline_isolation.py
 
 # With PointPillars checkpoint (recommended)
 python3 /workspace/test_pipeline_isolation.py \
-    --pp-checkpoint /workspace/pointpillars_kitti.pth
+    --pp-checkpoint /workspace/models/pointpillars_kitti_3class.pth
 
 # Reproduce a specific frame (use the seed printed at the end of any run)
 python3 /workspace/test_pipeline_isolation.py \
     --seed 42 \
-    --pp-checkpoint /workspace/pointpillars_kitti.pth
+    --pp-checkpoint /workspace/models/pointpillars_kitti_3class.pth
 
 # Lower score threshold to surface more detections
 python3 /workspace/test_pipeline_isolation.py \
-    --pp-checkpoint /workspace/pointpillars_kitti.pth \
+    --pp-checkpoint /workspace/models/pointpillars_kitti_3class.pth \
     --pp-score-thr 0.10
 
 # Tune Z-axis alignment (sensor mounted higher/lower than KITTI baseline)
 python3 /workspace/test_pipeline_isolation.py \
-    --pp-checkpoint /workspace/pointpillars_kitti.pth \
+    --pp-checkpoint /workspace/models/pointpillars_kitti_3class.pth \
     --z-offset -0.25
 
 # Fix intensity scale — this Velodyne outputs raw values up to ~1910 (not 0-255).
 # Use p95 of the raw distribution (~1072) to avoid outlier compression.
 python3 /workspace/test_pipeline_isolation.py \
-    --pp-checkpoint /workspace/pointpillars_kitti.pth \
+    --pp-checkpoint /workspace/models/pointpillars_kitti_3class.pth \
     --intensity-max 1072.0
 
 # Correct a heading misalignment (radians)
 python3 /workspace/test_pipeline_isolation.py \
-    --pp-checkpoint /workspace/pointpillars_kitti.pth \
+    --pp-checkpoint /workspace/models/pointpillars_kitti_3class.pth \
     --yaw-offset 0.05
 ```
 

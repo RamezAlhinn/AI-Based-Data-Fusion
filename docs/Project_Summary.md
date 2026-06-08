@@ -167,16 +167,17 @@ DONE ✅                                  TODO ⬜
 ──────────────────────────────────       ──────────────────────────
 ROS 2 devcontainer (Docker)              Merge feature branch → main
 Bag playback + clock handling            PointPillars 3D detector
-Camera + LiDAR latest-msg sync          AB3DMOT tracker
-YOLO11n-seg segmentation w/ classes     Performance profiling
-LiDAR → image projection (verified)     Camera intrinsics verification
-PointPainting (single projection pass)    (checkerboard calibration)
+Camera + LiDAR latest-msg sync           AB3DMOT tracker
+YOLO11n-seg segmentation w/ classes      Camera intrinsics verification
+LiDAR → image projection (verified)      (checkerboard calibration)
+PointPainting (single projection pass)
 Painted point cloud (/painted_cloud)
 Segmentation overlay (/seg_overlay)
 Points overlay (/points_overlay)
 Pipeline isolation test
 Foxglove visualisation (port 9090)
 Unit tests (3 passing)
+Performance & sync optimizations
 ```
 
 ---
@@ -188,14 +189,17 @@ AI-Based-Data-Fusion/
 ├── calib.txt                              ← derived sensor calibration
 ├── QUICKSTART.md                          ← run instructions
 ├── test_pipeline_isolation.py             ← offline pipeline verification
+├── test_pipeline_video.py                 ← full video tracking pipeline
+├── point_pillars.py                       ← PointPillars model implementation
+├── tracking.py                            ← 3D SORT tracking implementation
 ├── studentProject1/                       ← ROS 2 bag (sensor data)
 ├── .devcontainer/
-│   ├── Dockerfile                         ← ROS 2 Humble + YOLO + foxglove-bridge
-│   └── devcontainer.json                  ← port 9090 forwarded
 ├── docs/
 │   ├── Project_Summary.md                 ← this document
 │   ├── PointPainting_Learning_Guide.md
 │   └── Architecture_Proposal.md
+├── models/                                ← model weights (YOLO, PointPillars, DeepLab)
+├── scripts/                               ← utility and diagnostic scripts
 └── ros2_ws/src/
     ├── perception_framework/              ← arpitashil676
     │   └── lidar_to_image_projection.py

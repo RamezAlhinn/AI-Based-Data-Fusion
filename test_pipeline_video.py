@@ -26,8 +26,8 @@ import numpy as np
 # ── Paths ──────────────────────────────────────────────────────────────────────
 BAG_PATH   = '/workspace/studentProject1/studentProject1_0.db3'
 CALIB_PATH = '/workspace/calib.txt'
-YOLO_PATH  = '/workspace/yolo11m-seg.pt'
-PP_CKPT    = '/workspace/pointpillars_kitti_3class.pth'
+YOLO_PATH  = '/workspace/models/yolo11m-seg.pt'
+PP_CKPT    = '/workspace/models/pointpillars_kitti_3class.pth'
 OUTPUT_DIR = '/workspace/video_output'
 
 sys.path.insert(0, '/workspace')

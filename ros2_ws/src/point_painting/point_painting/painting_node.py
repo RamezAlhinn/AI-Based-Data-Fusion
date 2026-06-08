@@ -71,8 +71,10 @@ class PaintingNode(Node):
         self._bridge = CvBridge()
         self._frame_count = 0
         self._seg_model = None
-        self._latest_img = None
-        self._latest_cloud = None
+        self._latest_img_msg = None
+        self._latest_seg_image = None
+        self._latest_seg_image_stamp = None
+        self._latest_cv_image = None
 
         # --- Calibration ---
         self.declare_parameter('calib_file', '')
@@ -93,7 +95,7 @@ class PaintingNode(Node):
         try:
             from point_painting.segmentation.yolo_segmentation import load_model
             self._seg_model = load_model(checkpoint if checkpoint else None)
-            model_name = checkpoint if checkpoint else 'yolo11m-seg.pt'
+            model_name = checkpoint if checkpoint else 'yolo11n-seg.pt (default)'
             self.get_logger().info(f'Segmentation model loaded: {model_name}')
         except Exception as e:
             self.get_logger().error(f'Failed to load segmentation model: {e}')
@@ -107,59 +109,60 @@ class PaintingNode(Node):
         self.create_subscription(Image, '/blackfly_s/cam0/image_rectified', self._img_cb, 10)
         self.create_subscription(PointCloud2, '/velodyne/points_raw', self._cloud_cb, 10)
 
-        self.get_logger().info('PaintingNode started, waiting for synced messages...')
+        self.get_logger().info('PaintingNode started, waiting for messages...')
 
     def _img_cb(self, msg: Image):
-        """Cache the latest camera frame and trigger painting."""
-        self._latest_img = msg
-        if self._latest_cloud is not None:
-            self._callback(self._latest_img, self._latest_cloud)
+        """Cache the latest camera frame without triggering painting."""
+        self._latest_img_msg = msg
 
     def _cloud_cb(self, msg: PointCloud2):
-        """Cache the latest LiDAR scan and trigger painting."""
-        self._latest_cloud = msg
-        if self._latest_img is not None:
-            self._callback(self._latest_img, self._latest_cloud)
-
-    def _callback(self, img_msg: Image, cloud_msg: PointCloud2):
         """
-        Core painting callback — called on every new camera or LiDAR message.
-
-        Runs segmentation on the latest camera frame, projects the latest
-        LiDAR scan onto the resulting mask, and publishes the painted cloud
-        and verification overlays.
+        Process the latest LiDAR scan.
+        Only runs YOLO segmentation on the cached camera frame if it is new.
         """
-        cv_image = self._bridge.imgmsg_to_cv2(img_msg, desired_encoding='passthrough')
+        if self._latest_img_msg is None:
+            return
 
-        if self._seg_model is not None:
-            from point_painting.segmentation.yolo_segmentation import segment_image
-            pil_image = PilImage.fromarray(cv_image[..., ::-1])
-            seg_image = segment_image(self._seg_model, pil_image)
-        else:
-            seg_image = cv_image[:, :, 0] if cv_image.ndim == 3 else cv_image
+        img_msg = self._latest_img_msg
+        img_stamp = (img_msg.header.stamp.sec, img_msg.header.stamp.nanosec)
 
-        points = list(pc2.read_points(cloud_msg, field_names=('x', 'y', 'z'), skip_nans=True))
+        if self._latest_seg_image is None or self._latest_seg_image_stamp != img_stamp:
+            cv_image = self._bridge.imgmsg_to_cv2(img_msg, desired_encoding='passthrough')
+            if self._seg_model is not None:
+                from point_painting.segmentation.yolo_segmentation import segment_image
+                pil_image = PilImage.fromarray(cv_image[..., ::-1])
+                seg_image = segment_image(self._seg_model, pil_image)
+            else:
+                seg_image = cv_image[:, :, 0] if cv_image.ndim == 3 else cv_image
+
+            self._latest_seg_image = seg_image
+            self._latest_seg_image_stamp = img_stamp
+            self._latest_cv_image = cv_image
+
+        cv_image = self._latest_cv_image
+        seg_image = self._latest_seg_image
+
+        points = list(pc2.read_points(msg, field_names=('x', 'y', 'z'), skip_nans=True))
         if len(points) == 0:
             return
 
         xyz = np.array([(p[0], p[1], p[2]) for p in points], dtype=np.float32)
         painted, skipped, class_ids = paint_points(xyz, seg_image)
 
-        self._publish_painted_cloud(xyz, class_ids, cloud_msg.header)
+        self._publish_painted_cloud(xyz, class_ids, msg.header)
 
         self._frame_count += 1
-        # Throttle image topics to every 5th frame — full-res images at 8 Hz
-        # saturate Foxglove's 20 MB frame buffer when the tab is inactive.
+        # Throttle verification overlays to every 5th LiDAR frame
         if self._frame_count % 5 == 0:
             self._publish_segmentation_overlay(cv_image, seg_image, img_msg.header)
-            self._publish_points_overlay(cv_image, xyz, class_ids, img_msg.header)
+            self._publish_points_overlay(cv_image, xyz, class_ids, msg.header)
         if self._frame_count % 50 == 0:
             self.get_logger().info(
                 f'Frame {self._frame_count}: painted={painted}, skipped={skipped}')
 
-        msg = String()
-        msg.data = f'frame={self._frame_count} painted={painted} skipped={skipped}'
-        self._debug_pub.publish(msg)
+        msg_str = String()
+        msg_str.data = f'frame={self._frame_count} painted={painted} skipped={skipped}'
+        self._debug_pub.publish(msg_str)
 
     def _publish_segmentation_overlay(self, cv_image: np.ndarray,
                                       seg_image: np.ndarray, header):
@@ -227,13 +230,22 @@ class PaintingNode(Node):
         u_all, v_all = proj[:, 0], proj[:, 1]
         inside = (u_all >= 0) & (u_all < w) & (v_all >= 0) & (v_all < h)
 
+        # Depth-sorted rendering with scaled radius (far points drawn first)
+        depths = cam_depth[inside, 2]
+        order = np.argsort(depths)[::-1]
+
         class_arr = np.array(class_ids)
-        for idx, orig_idx in enumerate(depth_indices[inside]):
-            u = int(np.clip(u_all[inside][idx], 0, w - 1))
-            v = int(np.clip(v_all[inside][idx], 0, h - 1))
+        inside_indices = np.where(inside)[0]
+
+        for idx in order:
+            orig_idx = depth_indices[inside_indices[idx]]
+            u = int(np.clip(u_all[inside_indices[idx]], 0, w - 1))
+            v = int(np.clip(v_all[inside_indices[idx]], 0, h - 1))
             cls_id = class_arr[orig_idx]
             r, g, b = CLASS_COLORS.get(cls_id, UNPAINTED_COLOR)
-            _cv2.circle(canvas, (u, v), radius=2, color=(b, g, r), thickness=-1)
+            depth = depths[idx]
+            radius = max(3, int(30.0 / max(depth, 1.0)))
+            _cv2.circle(canvas, (u, v), radius=radius, color=(b, g, r), thickness=-1)
 
         msg = self._bridge.cv2_to_imgmsg(canvas, encoding='bgr8')
         msg.header = header
