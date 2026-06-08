@@ -368,7 +368,7 @@ for frame_idx, (img_bgr, lidar_raw) in enumerate(all_frames[:n_proc]):
 
     # ── PointPainting ──────────────────────────────────────────────────────────
     painted_cloud = paint_point_cloud(
-        lidar_raw, score_maps, projector, img_shape=(h, w),
+        lidar_raw, score_maps, projector, image_shape=(h, w),
         yolo_results=yolo_results
     )
 
