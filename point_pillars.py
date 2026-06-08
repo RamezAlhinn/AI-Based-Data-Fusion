@@ -79,7 +79,7 @@ class PointPillarsConfig:
 
     # Inference
     score_threshold:   float = 0.10
-    nms_iou_threshold: float = 0.01
+    nms_iou_threshold: float = 0.25
     max_detections:    int   = 50
 
     # Derived

@@ -522,6 +522,7 @@ with torch.no_grad():
               f'Try --intensity-max {args.intensity_max * _i_mean / 0.15:.0f} '
               f'(scales mean to 0.15)')
 
+print(f'  Point cloud shape passed to detect(): {points_4ch.shape}')
 boxes, scores, labels = pp_model.detect(points_4ch)
 print(f'  Detections (thr={args.pp_score_thr}): {len(boxes)}')
 for box, score, label in zip(boxes, scores, labels):

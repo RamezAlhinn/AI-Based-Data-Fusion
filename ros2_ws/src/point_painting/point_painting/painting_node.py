@@ -75,6 +75,7 @@ class PaintingNode(Node):
         self._latest_seg_image = None
         self._latest_seg_image_stamp = None
         self._latest_cv_image = None
+        self._clock_offset = None
 
         # --- Calibration ---
         self.declare_parameter('calib_file', '')
@@ -104,6 +105,7 @@ class PaintingNode(Node):
         # --- Publishers / Subscribers ---
         self._debug_pub = self.create_publisher(String, '/painting/debug', 10)
         self._painted_pub = self.create_publisher(PointCloud2, '/painting/painted_cloud', 10)
+        self._raw_aligned_pub = self.create_publisher(PointCloud2, '/painting/raw_cloud_aligned', 10)
         self._overlay_pub = self.create_publisher(Image, '/painting/segmentation_overlay', 10)
         self._points_overlay_pub = self.create_publisher(Image, '/painting/points_overlay', 10)
         self.create_subscription(Image, '/blackfly_s/cam0/image_rectified', self._img_cb, 10)
@@ -142,6 +144,25 @@ class PaintingNode(Node):
         cv_image = self._latest_cv_image
         seg_image = self._latest_seg_image
 
+        # Estimate clock domain offset dynamically on first frame pair
+        if self._clock_offset is None:
+            t_img = img_msg.header.stamp.sec + img_msg.header.stamp.nanosec * 1e-9
+            t_lidar = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+            self._clock_offset = t_img - t_lidar
+            self.get_logger().info(f'Estimated Camera-to-LiDAR clock offset: {self._clock_offset:.6f} seconds')
+
+        # Translate monotonic LiDAR stamp to Unix epoch clock domain
+        t_lidar = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+        t_out = t_lidar + self._clock_offset
+
+        from rclpy.time import Time
+        out_header = Header()
+        out_header.stamp = Time(seconds=t_out).to_msg()
+        out_header.frame_id = msg.header.frame_id
+
+        # Publish raw points synchronized in Unix time domain
+        self._publish_aligned_raw_cloud(msg, out_header)
+
         points = list(pc2.read_points(msg, field_names=('x', 'y', 'z'), skip_nans=True))
         if len(points) == 0:
             return
@@ -149,13 +170,13 @@ class PaintingNode(Node):
         xyz = np.array([(p[0], p[1], p[2]) for p in points], dtype=np.float32)
         painted, skipped, class_ids = paint_points(xyz, seg_image)
 
-        self._publish_painted_cloud(xyz, class_ids, msg.header)
+        self._publish_painted_cloud(xyz, class_ids, out_header)
 
         self._frame_count += 1
         # Throttle verification overlays to every 5th LiDAR frame
         if self._frame_count % 5 == 0:
             self._publish_segmentation_overlay(cv_image, seg_image, img_msg.header)
-            self._publish_points_overlay(cv_image, xyz, class_ids, msg.header)
+            self._publish_points_overlay(cv_image, xyz, class_ids, out_header)
         if self._frame_count % 50 == 0:
             self.get_logger().info(
                 f'Frame {self._frame_count}: painted={painted}, skipped={skipped}')
@@ -163,6 +184,20 @@ class PaintingNode(Node):
         msg_str = String()
         msg_str.data = f'frame={self._frame_count} painted={painted} skipped={skipped}'
         self._debug_pub.publish(msg_str)
+
+    def _publish_aligned_raw_cloud(self, orig_msg: PointCloud2, out_header: Header):
+        """Publish a copy of the raw point cloud re-stamped in the Unix clock domain."""
+        aligned_msg = PointCloud2()
+        aligned_msg.header = out_header
+        aligned_msg.height = orig_msg.height
+        aligned_msg.width = orig_msg.width
+        aligned_msg.fields = orig_msg.fields
+        aligned_msg.is_bigendian = orig_msg.is_bigendian
+        aligned_msg.point_step = orig_msg.point_step
+        aligned_msg.row_step = orig_msg.row_step
+        aligned_msg.data = orig_msg.data
+        aligned_msg.is_dense = orig_msg.is_dense
+        self._raw_aligned_pub.publish(aligned_msg)
 
     def _publish_segmentation_overlay(self, cv_image: np.ndarray,
                                       seg_image: np.ndarray, header):
