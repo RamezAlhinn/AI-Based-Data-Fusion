@@ -2,8 +2,8 @@
 Deep diagnostic for PointPillars checkpoint alignment.
 
 Run inside the container:
-  python3 /workspace/diagnose_pp.py \
-      --checkpoint /workspace/pointpillars_kitti_3class.pth
+  python3 /workspace/scripts/diagnose_pp.py \
+      --checkpoint /workspace/models/pointpillars_kitti_3class.pth
 
 What this checks:
   1. Checkpoint key names and shapes
@@ -16,7 +16,7 @@ sys.path.insert(0, '/workspace')
 from point_pillars import build_pointpillars, PointPillarsConfig
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--checkpoint', default='/workspace/pointpillars_kitti_3class.pth')
+parser.add_argument('--checkpoint', default='/workspace/models/pointpillars_kitti_3class.pth')
 args = parser.parse_args()
 
 # ── 1. Raw checkpoint keys ────────────────────────────────────────────────────

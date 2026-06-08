@@ -67,7 +67,9 @@ CALIB_PATH = os.path.join(_script_dir, 'calib.txt')
 OUTPUT_DIR = os.path.join(_script_dir, 'isolation_output')
 YOLO_MODEL = args.checkpoint
 if not YOLO_MODEL:
-    if os.path.exists(os.path.join(_script_dir, 'yolo11m-seg.pt')):
+    if os.path.exists(os.path.join(_script_dir, 'models', 'yolo11m-seg.pt')):
+        YOLO_MODEL = os.path.join(_script_dir, 'models', 'yolo11m-seg.pt')
+    elif os.path.exists(os.path.join(_script_dir, 'yolo11m-seg.pt')):
         YOLO_MODEL = os.path.join(_script_dir, 'yolo11m-seg.pt')
     elif os.path.exists('/yolo11m-seg.pt'):
         YOLO_MODEL = '/yolo11m-seg.pt'
@@ -76,10 +78,16 @@ if not YOLO_MODEL:
 
 PP_CHECKPOINT = args.pp_checkpoint
 if not PP_CHECKPOINT:
-    if os.path.exists(os.path.join(_script_dir, 'pointpillars_kitti_3class.pth')):
+    if os.path.exists(os.path.join(_script_dir, 'models', 'pointpillars_kitti_3class.pth')):
+        PP_CHECKPOINT = os.path.join(_script_dir, 'models', 'pointpillars_kitti_3class.pth')
+    elif os.path.exists(os.path.join(_script_dir, 'pointpillars_kitti_3class.pth')):
         PP_CHECKPOINT = os.path.join(_script_dir, 'pointpillars_kitti_3class.pth')
+    elif os.path.exists('/workspace/models/pointpillars_kitti_3class.pth'):
+        PP_CHECKPOINT = '/workspace/models/pointpillars_kitti_3class.pth'
     elif os.path.exists('/workspace/pointpillars_kitti_3class.pth'):
         PP_CHECKPOINT = '/workspace/pointpillars_kitti_3class.pth'
+    elif os.path.exists(os.path.join(_script_dir, 'models', 'pointpillars_kitti.pth')):
+        PP_CHECKPOINT = os.path.join(_script_dir, 'models', 'pointpillars_kitti.pth')
     elif os.path.exists(os.path.join(_script_dir, 'pointpillars_kitti.pth')):
         PP_CHECKPOINT = os.path.join(_script_dir, 'pointpillars_kitti.pth')
 
