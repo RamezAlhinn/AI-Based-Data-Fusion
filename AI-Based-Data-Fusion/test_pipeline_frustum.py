@@ -41,6 +41,7 @@ Run modes
 # ══════════════════════════════════════════════════════════════════════════════
 import sys
 import os
+sys.path.insert(0, "/workspace")
 import random
 import argparse
 from dataclasses import dataclass, field
@@ -74,7 +75,7 @@ rng = random.Random(args.seed)
 # ══════════════════════════════════════════════════════════════════════════════
 #  Paths
 # ══════════════════════════════════════════════════════════════════════════════
-BAG_PATH   = "/workspace/AI-Based-Data-Fusion/studentProject1/"
+BAG_PATH   = "/tmp/studentProject1/"
 CALIB_PATH = "/workspace/AI-Based-Data-Fusion/calib.txt"
 OUTPUT_DIR = "/workspace/AI-Based-Data-Fusion/frustum_output"
 _script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -164,6 +165,9 @@ class Detection3D:
     heading: float
     score: float
     cls_id: int                          # internal ID: 0=Ped, 1=Cyc, 2=Car
+    paint_filtered: bool = False
+    paint_kept: int = 0
+    paint_discarded: int = 0
     cls_name: str = field(init=False)
     # cls_id uses INTERNAL IDs, not COCO
     _NAMES = {0: "Pedestrian", 1: "Cyclist", 2: "Car"}
@@ -238,6 +242,7 @@ class FrustumDetector:
         yolo_results,                  # list from model(img_rgb, ...)
         projector,                     # KittiLidarToImageProjector
         img_shape: tuple,              # (H, W)
+        painted_cloud: np.ndarray = None,
     ) -> List[Detection3D]:
         from sklearn.cluster import DBSCAN
 
@@ -293,6 +298,27 @@ class FrustumDetector:
 
                 pts3d = lidar_filtered[lidar_idx[in_mask], :3]   # (K,3)
 
+                paint_filtered = False
+                paint_kept = len(pts3d)
+                paint_discarded = 0
+
+                if painted_cloud is not None:
+                    score_col_map = {0: 5, 1: 6, 2: 7}
+                    col_idx = score_col_map[internal_cls]
+                    painting_scores = painted_cloud[lidar_idx[in_mask], col_idx]
+                    keep_mask_paint = painting_scores > 0.15
+                    pts3d_filtered = pts3d[keep_mask_paint]
+                    
+                    if len(pts3d_filtered) >= self.min_pts:
+                        paint_filtered = True
+                        paint_kept = len(pts3d_filtered)
+                        paint_discarded = len(pts3d) - len(pts3d_filtered)
+                        pts3d = pts3d_filtered
+                    else:
+                        paint_filtered = False
+                        paint_kept = len(pts3d)
+                        paint_discarded = len(pts3d) - len(pts3d_filtered)
+
                 # ── Intra-frustum DBSCAN: keep largest cluster (foreground) ──
                 if self.use_dbscan and len(pts3d) >= self.min_pts * 2:
                     labels = DBSCAN(
@@ -312,12 +338,25 @@ class FrustumDetector:
                 centre = (mins + maxs) / 2.0
                 dims   = maxs - mins + 1e-3
 
+                # PCA-based heading calculation (skip for pedestrians, internal_cls == 0)
+                heading = 0.0
+                if internal_cls != 0 and len(pts3d) >= 4:
+                    try:
+                        cov = np.cov(pts3d[:, :2].T)
+                        evals, evecs = np.linalg.eigh(cov)
+                        heading = float(np.arctan2(evecs[1, -1], evecs[0, -1]))
+                    except Exception:
+                        heading = 0.0
+
                 dets.append(Detection3D(
                     x=float(centre[0]), y=float(centre[1]), z=float(centre[2]),
                     dx=float(dims[0]),  dy=float(dims[1]),  dz=float(dims[2]),
-                    heading=0.0,
+                    heading=heading,
                     score=float(conf_score),
                     cls_id=internal_cls,
+                    paint_filtered=paint_filtered,
+                    paint_kept=paint_kept,
+                    paint_discarded=paint_discarded,
                 ))
 
         dets.sort(key=lambda d: d.score, reverse=True)
@@ -599,10 +638,16 @@ def draw_tracks(
     detections: List[Detection3D],
     tracked: List[TrackedObject],
     projector,
+    range_m: float = 60.,
+    bev_size: int  = 700,
 ) -> np.ndarray:
-    """Camera image with 3D wireframe boxes (detections) + track labels."""
+    """
+    Combined track visualisation:
+      top    — Camera image with 3D wireframe boxes (detections) + track labels
+      bottom — BEV panel with 2D footprints, tracks, and IDs
+    """
     out = img_bgr.copy()
-    h, w = out.shape[:2]
+    h_cam, w_cam = out.shape[:2]
 
     def _proj(pt3d):
         cp = projector.lidar_to_camera(pt3d.reshape(1,3).astype(np.float32))
@@ -610,7 +655,7 @@ def draw_tracks(
         uv = (projector.P2[:,:3] @ cp.T).T
         uv = uv[:,:2] / uv[:,2:3]
         u,v = int(uv[0,0]),int(uv[0,1])
-        if -100<u<w+100 and -100<v<h+100: return (u,v)
+        if -100<u<w_cam+100 and -100<v<h_cam+100: return (u,v)
         return None
 
     # Detection wireframes
@@ -635,7 +680,60 @@ def draw_tracks(
         cv2.putText(out,label,(u,v-4),cv2.FONT_HERSHEY_SIMPLEX,0.55,(0,255,255),2)
         cv2.circle(out,(u,v),6,color,-1)
 
-    return out
+    scale_cam  = bev_size / w_cam
+    cam_panel  = cv2.resize(out, (bev_size, int(h_cam*scale_cam)),
+                             interpolation=cv2.INTER_AREA)
+
+    # ── BEV panel ─────────────────────────────────────────────────────────────
+    bev    = np.zeros((bev_size, bev_size, 3), dtype=np.uint8)
+    scale  = bev_size / (2*range_m)
+    ox, oy = bev_size//2, bev_size//2
+
+    for r in [10,20,30,40,50]:
+        cv2.circle(bev,(ox,oy),int(r*scale),(30,30,30),1)
+        cv2.putText(bev,f"{r}m",(ox+2,oy-int(r*scale)+12),
+                    cv2.FONT_HERSHEY_SIMPLEX,0.3,(60,60,60),1)
+    cv2.line(bev,(ox,0),(ox,bev_size),(30,30,30),1)
+    cv2.line(bev,(0,oy),(bev_size,oy),(30,30,30),1)
+    cv2.putText(bev,"FWD",(ox+4,14),cv2.FONT_HERSHEY_SIMPLEX,0.4,(80,80,80),1)
+    cv2.rectangle(bev,(ox-6,oy-10),(ox+6,oy+10),(100,100,100),-1)
+
+    # Draw detections BEV footprint (thin class-colored outline)
+    for det in detections:
+        color  = _IDET_COLORS.get(det.cls_id,(200,200,200))
+        pts    = np.stack([
+            (ox + det.corners_bev[:,1]*scale).astype(np.int32),
+            (oy - det.corners_bev[:,0]*scale).astype(np.int32),
+        ], axis=1)
+        cv2.polylines(bev,[pts],isClosed=True,color=color,thickness=1)
+
+    # Draw tracked objects BEV footprint (thick class-colored outline + track labels with IDs)
+    for t in tracked:
+        cx, cy, cz, dx, dy, dz, heading = t.box7
+        c, s   = np.cos(heading), np.sin(heading)
+        hl, hw = dx / 2, dy / 2
+        corners = np.array([[hl, hw], [hl, -hw], [-hl, -hw], [-hl, hw]])
+        R = np.array([[c, -s], [s, c]])
+        corners_bev = (R @ corners.T).T + np.array([cx, cy])
+
+        color  = _IDET_COLORS.get(t.cls_id,(200,200,200))
+        pts    = np.stack([
+            (ox + corners_bev[:,1]*scale).astype(np.int32),
+            (oy - corners_bev[:,0]*scale).astype(np.int32),
+        ], axis=1)
+        cv2.polylines(bev,[pts],isClosed=True,color=color,thickness=2)
+        cu  = int(ox + cy*scale)
+        cv_ = int(oy - cx*scale)
+        cv2.circle(bev,(cu,cv_),6,color,-1)
+        label = f"{t.cls_name} ID:{t.track_id}"
+        if t.score > 0: label += f" {t.score:.2f}"
+        (tw,th),_ = cv2.getTextSize(label,cv2.FONT_HERSHEY_SIMPLEX,0.38,1)
+        tx = int(np.clip(cu+8,2,bev_size-tw-2))
+        ty = int(np.clip(cv_-8,th+2,bev_size-2))
+        cv2.putText(bev,label,(tx,ty),cv2.FONT_HERSHEY_SIMPLEX,0.38,(0,255,255),1)
+
+    sep = np.full((4,bev_size,3),80,dtype=np.uint8)
+    return np.vstack([cam_panel, sep, bev])
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -836,13 +934,25 @@ while reader.has_next():
 
     # ── Stage 6 — Frustum 3D detection  ← KEY CHANGE ─────────────────────────
     print("  [Stage 6] FrustumDetector...")
-    detections_raw = detector.detect(lidar_filtered, results_yolo, projector, (h,w))
+    from point_pillars import paint_point_cloud
+    painted_cloud = paint_point_cloud(
+        lidar_filtered,
+        score_maps,
+        projector,
+        (h, w),
+        yolo_results=results_yolo
+    )
+    detections_raw = detector.detect(lidar_filtered, results_yolo, projector, (h,w), painted_cloud=painted_cloud)
     detections     = nms_3d(detections_raw, dist_thr=args.nms_dist)
     print(f"    {len(detections_raw)} raw  →  {len(detections)} after NMS")
     for d in detections:
         print(f"      {d.cls_name:12s}  score={d.score:.2f}  "
               f"({d.x:.1f},{d.y:.1f},{d.z:.1f})  "
               f"{d.dx:.2f}×{d.dy:.2f}×{d.dz:.2f}  "
+              f"heading={d.heading:.3f}  "
+              f"paint_filtered={d.paint_filtered}  "
+              f"kept={d.paint_kept}  "
+              f"discarded={d.paint_discarded}  "
               f"pts_in_frustum≥{args.min_pts}")
 
     combined = draw_combined(img_frame, detections, projector)
@@ -879,3 +989,26 @@ for f in sorted(os.listdir(OUTPUT_DIR)):
 if not args.all_frames:
     print(f"\nReproduce: python3 {os.path.basename(__file__)} --seed {list(target_indices)[0]}")
 print(f"All frames: python3 {os.path.basename(__file__)} --all-frames")
+
+
+def make_video(output_dir, fps=10):
+    from pathlib import Path
+    files = sorted(Path(output_dir).glob("07_tracked_*.jpg"), key=lambda p: int(p.stem.split("_")[-1]))
+    if len(files) < 2:
+        print("Warning: Fewer than 2 frames found, skipping video generation.")
+        return
+    
+    first_frame = cv2.imread(str(files[0]))
+    h_f, w_f = first_frame.shape[:2]
+    
+    out_video_path = os.path.join(output_dir, "pipeline_output.mp4")
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    writer = cv2.VideoWriter(out_video_path, fourcc, fps, (w_f, h_f))
+    
+    for f in files:
+        frame = cv2.imread(str(f))
+        writer.write(frame)
+    writer.release()
+    print(f"Saved video: pipeline_output.mp4 ({len(files)} frames at {fps}fps)")
+
+make_video(OUTPUT_DIR)
