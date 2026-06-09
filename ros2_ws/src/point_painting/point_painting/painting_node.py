@@ -7,15 +7,18 @@ point onto the segmentation mask, and attaches the COCO class ID at that
 pixel to the point.
 
 Published topics:
-    /painting/debug               (std_msgs/String)      — painted/skipped counts per frame
-    /painting/painted_cloud       (sensor_msgs/PointCloud2) — full point cloud coloured by class
-    /painting/segmentation_overlay (sensor_msgs/Image)   — YOLO masks blended on camera image
-    /painting/points_overlay      (sensor_msgs/Image)    — projected LiDAR dots on camera image
+    /painting/debug                (std_msgs/String)         — painted/skipped counts per frame
+    /painting/painted_cloud        (sensor_msgs/PointCloud2) — full point cloud coloured by class (Foxglove viz)
+    /painting/scored_cloud         (sensor_msgs/PointCloud2) — scored cloud [x,y,z,int,ring,s_ped,s_car,s_cyc]
+                                                               consumed by the frustum_detection node
+    /painting/raw_cloud_aligned    (sensor_msgs/PointCloud2) — raw LiDAR re-stamped in Unix clock domain
+    /painting/segmentation_overlay (sensor_msgs/Image)       — YOLO masks blended on camera image
+    /painting/points_overlay       (sensor_msgs/Image)       — projected LiDAR dots on camera image
 
 Parameters:
     calib_file      (str) — path to KITTI-format calibration file (calib.txt)
     checkpoint_path (str) — optional path to a custom YOLO model file
-                            defaults to yolo26n-seg.pt (auto-downloaded)
+                            defaults to yolo11m-seg.pt (auto-downloaded)
 """
 
 import sys
@@ -30,7 +33,7 @@ from cv_bridge import CvBridge
 from PIL import Image as PilImage
 from sensor_msgs_py import point_cloud2 as pc2
 
-from point_painting.painting_logic import init_projector, paint_points
+from point_painting.painting_logic import init_projector, paint_points, paint_points_scored
 
 # COCO class IDs mapped to RGB display colours for Foxglove.
 # -1 = background / no detection — uses UNPAINTED_COLOR instead.
@@ -71,8 +74,12 @@ class PaintingNode(Node):
         self._bridge = CvBridge()
         self._frame_count = 0
         self._seg_model = None
-        self._latest_img = None
-        self._latest_cloud = None
+        self._latest_img_msg = None
+        self._latest_seg_image = None
+        self._latest_seg_image_stamp = None
+        self._latest_cv_image = None
+        self._latest_score_maps = None   # dict: coco_id → (H,W) float32 score map
+        self._clock_offset = None
 
         # --- Calibration ---
         self.declare_parameter('calib_file', '')
@@ -93,7 +100,7 @@ class PaintingNode(Node):
         try:
             from point_painting.segmentation.yolo_segmentation import load_model
             self._seg_model = load_model(checkpoint if checkpoint else None)
-            model_name = checkpoint if checkpoint else 'yolo26n-seg.pt'
+            model_name = checkpoint if checkpoint else 'yolo11n-seg.pt (default)'
             self.get_logger().info(f'Segmentation model loaded: {model_name}')
         except Exception as e:
             self.get_logger().error(f'Failed to load segmentation model: {e}')
@@ -102,64 +109,117 @@ class PaintingNode(Node):
         # --- Publishers / Subscribers ---
         self._debug_pub = self.create_publisher(String, '/painting/debug', 10)
         self._painted_pub = self.create_publisher(PointCloud2, '/painting/painted_cloud', 10)
+        self._scored_pub = self.create_publisher(PointCloud2, '/painting/scored_cloud', 10)
+        self._raw_aligned_pub = self.create_publisher(PointCloud2, '/painting/raw_cloud_aligned', 10)
         self._overlay_pub = self.create_publisher(Image, '/painting/segmentation_overlay', 10)
         self._points_overlay_pub = self.create_publisher(Image, '/painting/points_overlay', 10)
         self.create_subscription(Image, '/blackfly_s/cam0/image_rectified', self._img_cb, 10)
         self.create_subscription(PointCloud2, '/velodyne/points_raw', self._cloud_cb, 10)
 
-        self.get_logger().info('PaintingNode started, waiting for synced messages...')
+        self.get_logger().info('PaintingNode started, waiting for messages...')
 
     def _img_cb(self, msg: Image):
-        """Cache the latest camera frame and trigger painting."""
-        self._latest_img = msg
-        if self._latest_cloud is not None:
-            self._callback(self._latest_img, self._latest_cloud)
+        """Cache the latest camera frame without triggering painting."""
+        self._latest_img_msg = msg
 
     def _cloud_cb(self, msg: PointCloud2):
-        """Cache the latest LiDAR scan and trigger painting."""
-        self._latest_cloud = msg
-        if self._latest_img is not None:
-            self._callback(self._latest_img, self._latest_cloud)
-
-    def _callback(self, img_msg: Image, cloud_msg: PointCloud2):
         """
-        Core painting callback — called on every new camera or LiDAR message.
-
-        Runs segmentation on the latest camera frame, projects the latest
-        LiDAR scan onto the resulting mask, and publishes the painted cloud
-        and verification overlays.
+        Process the latest LiDAR scan.
+        Only runs YOLO segmentation on the cached camera frame if it is new.
         """
-        cv_image = self._bridge.imgmsg_to_cv2(img_msg, desired_encoding='passthrough')
+        if self._latest_img_msg is None:
+            return
 
-        if self._seg_model is not None:
-            from point_painting.segmentation.yolo_segmentation import segment_image
-            pil_image = PilImage.fromarray(cv_image[..., ::-1])
-            seg_image = segment_image(self._seg_model, pil_image)
-        else:
-            seg_image = cv_image[:, :, 0] if cv_image.ndim == 3 else cv_image
+        img_msg = self._latest_img_msg
+        img_stamp = (img_msg.header.stamp.sec, img_msg.header.stamp.nanosec)
 
-        points = list(pc2.read_points(cloud_msg, field_names=('x', 'y', 'z'), skip_nans=True))
+        if self._latest_seg_image is None or self._latest_seg_image_stamp != img_stamp:
+            cv_image = self._bridge.imgmsg_to_cv2(img_msg, desired_encoding='passthrough')
+            if self._seg_model is not None:
+                from point_painting.segmentation.yolo_segmentation import (
+                    segment_image, build_score_maps)
+                pil_image = PilImage.fromarray(cv_image[..., ::-1])
+                img_rgb = np.array(pil_image)
+                # Run YOLO once — get both the class mask and score maps
+                seg_image, yolo_results = segment_image(self._seg_model, pil_image,
+                                                        return_results=True)
+                try:
+                    score_maps = build_score_maps(img_rgb, yolo_results)
+                except Exception:
+                    score_maps = {}
+            else:
+                seg_image = cv_image[:, :, 0] if cv_image.ndim == 3 else cv_image
+                score_maps = {}
+
+            self._latest_seg_image = seg_image
+            self._latest_score_maps = score_maps
+            self._latest_seg_image_stamp = img_stamp
+            self._latest_cv_image = cv_image
+
+        cv_image = self._latest_cv_image
+        seg_image = self._latest_seg_image
+
+        # Estimate clock domain offset dynamically on first frame pair
+        if self._clock_offset is None:
+            t_img = img_msg.header.stamp.sec + img_msg.header.stamp.nanosec * 1e-9
+            t_lidar = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+            self._clock_offset = t_img - t_lidar
+            self.get_logger().info(f'Estimated Camera-to-LiDAR clock offset: {self._clock_offset:.6f} seconds')
+
+        # Translate monotonic LiDAR stamp to Unix epoch clock domain
+        t_lidar = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+        t_out = t_lidar + self._clock_offset
+
+        from rclpy.time import Time
+        out_header = Header()
+        out_header.stamp = Time(seconds=t_out).to_msg()
+        out_header.frame_id = msg.header.frame_id
+
+        # Publish raw points synchronized in Unix time domain
+        self._publish_aligned_raw_cloud(msg, out_header)
+
+        points = list(pc2.read_points(msg, field_names=('x', 'y', 'z'), skip_nans=True))
         if len(points) == 0:
             return
 
         xyz = np.array([(p[0], p[1], p[2]) for p in points], dtype=np.float32)
         painted, skipped, class_ids = paint_points(xyz, seg_image)
 
-        self._publish_painted_cloud(xyz, class_ids, cloud_msg.header)
+        # Publish visualization cloud (coloured by class for Foxglove)
+        self._publish_painted_cloud(xyz, class_ids, out_header)
+
+        # Publish scored cloud for frustum_detection node
+        score_maps = self._latest_score_maps or {}
+        if score_maps:
+            scored = paint_points_scored(xyz, score_maps)
+            self._publish_scored_cloud(scored, out_header)
 
         self._frame_count += 1
-        # Throttle image topics to every 5th frame — full-res images at 8 Hz
-        # saturate Foxglove's 20 MB frame buffer when the tab is inactive.
+        # Throttle verification overlays to every 5th LiDAR frame
         if self._frame_count % 5 == 0:
             self._publish_segmentation_overlay(cv_image, seg_image, img_msg.header)
-            self._publish_points_overlay(cv_image, xyz, class_ids, img_msg.header)
+            self._publish_points_overlay(cv_image, xyz, class_ids, out_header)
         if self._frame_count % 50 == 0:
             self.get_logger().info(
                 f'Frame {self._frame_count}: painted={painted}, skipped={skipped}')
 
-        msg = String()
-        msg.data = f'frame={self._frame_count} painted={painted} skipped={skipped}'
-        self._debug_pub.publish(msg)
+        msg_str = String()
+        msg_str.data = f'frame={self._frame_count} painted={painted} skipped={skipped}'
+        self._debug_pub.publish(msg_str)
+
+    def _publish_aligned_raw_cloud(self, orig_msg: PointCloud2, out_header: Header):
+        """Publish a copy of the raw point cloud re-stamped in the Unix clock domain."""
+        aligned_msg = PointCloud2()
+        aligned_msg.header = out_header
+        aligned_msg.height = orig_msg.height
+        aligned_msg.width = orig_msg.width
+        aligned_msg.fields = orig_msg.fields
+        aligned_msg.is_bigendian = orig_msg.is_bigendian
+        aligned_msg.point_step = orig_msg.point_step
+        aligned_msg.row_step = orig_msg.row_step
+        aligned_msg.data = orig_msg.data
+        aligned_msg.is_dense = orig_msg.is_dense
+        self._raw_aligned_pub.publish(aligned_msg)
 
     def _publish_segmentation_overlay(self, cv_image: np.ndarray,
                                       seg_image: np.ndarray, header):
@@ -227,13 +287,22 @@ class PaintingNode(Node):
         u_all, v_all = proj[:, 0], proj[:, 1]
         inside = (u_all >= 0) & (u_all < w) & (v_all >= 0) & (v_all < h)
 
+        # Depth-sorted rendering with scaled radius (far points drawn first)
+        depths = cam_depth[inside, 2]
+        order = np.argsort(depths)[::-1]
+
         class_arr = np.array(class_ids)
-        for idx, orig_idx in enumerate(depth_indices[inside]):
-            u = int(np.clip(u_all[inside][idx], 0, w - 1))
-            v = int(np.clip(v_all[inside][idx], 0, h - 1))
+        inside_indices = np.where(inside)[0]
+
+        for idx in order:
+            orig_idx = depth_indices[inside_indices[idx]]
+            u = int(np.clip(u_all[inside_indices[idx]], 0, w - 1))
+            v = int(np.clip(v_all[inside_indices[idx]], 0, h - 1))
             cls_id = class_arr[orig_idx]
             r, g, b = CLASS_COLORS.get(cls_id, UNPAINTED_COLOR)
-            _cv2.circle(canvas, (u, v), radius=2, color=(b, g, r), thickness=-1)
+            depth = depths[idx]
+            radius = max(3, int(30.0 / max(depth, 1.0)))
+            _cv2.circle(canvas, (u, v), radius=radius, color=(b, g, r), thickness=-1)
 
         msg = self._bridge.cv2_to_imgmsg(canvas, encoding='bgr8')
         msg.header = header
@@ -262,6 +331,36 @@ class PaintingNode(Node):
 
         cloud_msg = pc2.create_cloud(header, fields, cloud_data)
         self._painted_pub.publish(cloud_msg)
+
+    def _publish_scored_cloud(self, scored: np.ndarray, header) -> None:
+        """
+        Publish the scored point cloud on /painting/scored_cloud.
+
+        Column layout (matches paint_points_scored output):
+          0  x          (float32)
+          1  y          (float32)
+          2  z          (float32)
+          3  intensity  (float32, 0.0)
+          4  ring       (float32, 0.0)
+          5  s_ped      pedestrian score [0, 1]
+          6  s_car      car score [0, 1]
+          7  s_cyc      cyclist score [0, 1]
+
+        The frustum_detection node subscribes to this topic and uses columns
+        5-7 to filter LiDAR points inside each YOLO frustum.
+        """
+        fields = [
+            PointField(name='x',         offset=0,  datatype=PointField.FLOAT32, count=1),
+            PointField(name='y',         offset=4,  datatype=PointField.FLOAT32, count=1),
+            PointField(name='z',         offset=8,  datatype=PointField.FLOAT32, count=1),
+            PointField(name='intensity', offset=12, datatype=PointField.FLOAT32, count=1),
+            PointField(name='ring',      offset=16, datatype=PointField.FLOAT32, count=1),
+            PointField(name='s_ped',     offset=20, datatype=PointField.FLOAT32, count=1),
+            PointField(name='s_car',     offset=24, datatype=PointField.FLOAT32, count=1),
+            PointField(name='s_cyc',     offset=28, datatype=PointField.FLOAT32, count=1),
+        ]
+        cloud_msg = pc2.create_cloud(header, fields, scored.tolist())
+        self._scored_pub.publish(cloud_msg)
 
 
 def main(args=None):

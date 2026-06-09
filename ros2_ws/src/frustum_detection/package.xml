@@ -1,0 +1,33 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>frustum_detection</name>
+  <version>0.1.0</version>
+  <description>
+    Frustum-based 3D object detection node.
+
+    Subscribes to the scored point cloud published by the point_painting node
+    (/painting/scored_cloud) and to the rectified camera image, then for each
+    YOLO 2D instance mask projects the LiDAR points inside the frustum, applies
+    PointPainting score filtering, runs intra-frustum DBSCAN, fits a 3D bounding
+    box, and publishes detection results and visualisation topics.
+  </description>
+  <maintainer email="ramez.hn5@gmail.com">Ramez Alhinn</maintainer>
+  <license>MIT</license>
+
+  <depend>rclpy</depend>
+  <depend>sensor_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>visualization_msgs</depend>
+  <depend>cv_bridge</depend>
+  <depend>point_painting</depend>
+
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>
