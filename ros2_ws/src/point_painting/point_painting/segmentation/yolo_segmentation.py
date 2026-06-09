@@ -42,18 +42,19 @@ def load_model(checkpoint_path: str = None):
     if checkpoint_path:
         model_path = checkpoint_path
     else:
-        # Find model in workspace or default to yolo11n-seg.pt (fastest)
+        # Prefer the medium model (better accuracy) over nano.
+        # Search order: medium first, then nano, then auto-download nano as last resort.
         possible_paths = [
-            '/workspace/models/yolo11n-seg.pt',
             '/workspace/models/yolo11m-seg.pt',
+            '/workspace/models/yolo11n-seg.pt',
+            '/workspace/yolo11m-seg.pt',
+            '/workspace/ros2_ws/yolo11m-seg.pt',
+            os.path.join(os.path.dirname(__file__), '../../../../models/yolo11m-seg.pt'),
+            os.path.join(os.path.dirname(__file__), '../../../../../../models/yolo11m-seg.pt'),
             '/workspace/yolo11n-seg.pt',
             '/workspace/ros2_ws/yolo11n-seg.pt',
             os.path.join(os.path.dirname(__file__), '../../../../models/yolo11n-seg.pt'),
             os.path.join(os.path.dirname(__file__), '../../../../../../models/yolo11n-seg.pt'),
-            os.path.join(os.path.dirname(__file__), '../../../../yolo11n-seg.pt'),
-            os.path.join(os.path.dirname(__file__), '../../../../../../yolo11n-seg.pt'),
-            '/workspace/yolo11m-seg.pt',
-            '/workspace/ros2_ws/yolo11m-seg.pt',
             'yolo11n-seg.pt'
         ]
         model_path = 'yolo11n-seg.pt'

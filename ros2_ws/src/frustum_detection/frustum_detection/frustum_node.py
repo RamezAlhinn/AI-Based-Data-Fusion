@@ -111,7 +111,7 @@ class FrustumNode(Node):
             from point_painting.segmentation.yolo_segmentation import load_model
             self._yolo_model = load_model(checkpoint if checkpoint else None)
             self.get_logger().info(
-                f'YOLO model loaded: {checkpoint or "yolo11n-seg.pt (default)"}'
+                f'YOLO model loaded: {self._yolo_model.ckpt_path}'
             )
         except Exception as e:
             self.get_logger().error(f'Failed to load YOLO model: {e}')

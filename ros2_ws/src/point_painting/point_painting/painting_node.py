@@ -103,8 +103,8 @@ class PaintingNode(Node):
         try:
             from point_painting.segmentation.yolo_segmentation import load_model
             self._seg_model = load_model(checkpoint if checkpoint else None)
-            model_name = checkpoint if checkpoint else 'yolo11n-seg.pt (default)'
-            self.get_logger().info(f'Segmentation model loaded: {model_name}')
+            self.get_logger().info(
+                f'Segmentation model loaded: {self._seg_model.ckpt_path}')
         except Exception as e:
             self.get_logger().error(f'Failed to load segmentation model: {e}')
             self.get_logger().warn('Node will use raw image channel as label map.')
