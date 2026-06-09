@@ -1,77 +1,68 @@
-# Quickstart — See the Pipeline Running
+# Quickstart — Running the Fused Perception Pipeline
 
-All commands run **inside the Dev Container** (`><` → Reopen in Container).  
-Open four terminal tabs in VS Code (`Ctrl+Shift+\`` to split).
+This guide explains how to build, run, and visualize the **PointPainting + Frustum 3D Object Detection & Tracking** pipeline.
 
-> **Visualisation:** RViz2 has no display inside the container. We use **Foxglove Studio** on your Mac instead, connected over a WebSocket bridge on port `9090`.
+All ROS 2 commands must run **inside the Dev Container** (`><` → Reopen in Container). Open multiple terminal tabs in VS Code (`Ctrl+Shift+``) to run the components.
 
 ---
 
-## Step 1 — Build (once per container start)
+## Pipeline Overview
 
+```
+LiDAR Scan ──┐
+             ▼
+        [PaintingNode] ──► /painting/scored_cloud ──┐
+             ▲                                      ▼
+Camera ──────┴──────────► /blackfly_s/cam0/... ──► [FrustumNode] ──► /frustum/markers (3D Boxes)
+                                                                 ──► /frustum/bev     (BEV panel)
+```
+
+1. **`PaintingNode`**: Receives LiDAR and camera feeds, runs YOLO instance segmentation, projects the point cloud onto the image, and publishes a point cloud enriched with semantic class scores.
+2. **`FrustumNode`**: Subscribes to the camera feed and the scored point cloud. It uses the 2D YOLO bounding boxes to extract 3D point cloud frustums, clusters them using DBSCAN to estimate 3D bounding boxes, runs NMS, and tracks objects frame-to-frame using AB3DMOT.
+
+---
+
+## Step 1 — Build the Workspace (Once per container start)
+
+Inside the container terminal:
 ```bash
 cd /workspace/ros2_ws
-colcon build --symlink-install --packages-select perception_framework point_painting
+colcon build --symlink-install
 source install/setup.bash
 ```
 
 ---
 
-## Step 2 — Run the painting node (Terminal 1)
+## Step 2 — Run the PointPainting Node (Terminal 1)
 
-### Mode A — Projection only (no segmentation model needed)
-
-```bash
-source /workspace/ros2_ws/install/setup.bash
-
-ros2 run point_painting painting_node \
-  --ros-args -p calib_file:=/workspace/calib.txt
-```
-
-Expected output:
-```
-[INFO] Loaded calibration from: /workspace/calib.txt
-[WARN] No segmentation model loaded — node will use raw image channel as label map.
-[INFO] PaintingNode started, waiting for synced messages...
-```
-
-### Mode B — Full pipeline with YOLO segmentation
-
-No model file needed. YOLO26n-seg downloads automatically on first run (~6 MB, cached).  
-Uses native COCO class IDs: `0`=person, `1`=bicycle, `2`=car, `3`=motorcycle, `5`=bus, `7`=truck.
+This node performs camera-LiDAR projection and YOLO segmentation to score the point cloud:
 
 ```bash
 source /workspace/ros2_ws/install/setup.bash
 
-ros2 run point_painting painting_node \
-  --ros-args -p calib_file:=/workspace/calib.txt
-```
-
-Expected output:
-```
-[INFO] Loaded calibration from: /workspace/calib.txt
-[INFO] Segmentation model loaded: yolo26n-seg.pt
-[INFO] PaintingNode started, waiting for synced messages...
-```
-
-To use a custom model file (e.g. a fine-tuned checkpoint):
-```bash
-ros2 run point_painting painting_node \
-  --ros-args \
+ros2 run point_painting painting_node --ros-args \
   -p calib_file:=/workspace/calib.txt \
-  -p checkpoint_path:=/workspace/yolo26n-seg.pt
+  -p checkpoint_path:=/workspace/models/yolo11m-seg.pt
 ```
 
-**Colour map in Foxglove 3D view:**
-- 🔴 Red = person
-- 🟢 Green = car / truck
-- 🔵 Blue = bicycle
-- 🟠 Orange = motorcycle
-- 🟡 Yellow = bus
+*Note: If `/workspace/models/yolo11m-seg.pt` is not present, it will automatically fall back to downloading the lightweight default model.*
 
 ---
 
-## Step 3 — Play the bag (Terminal 2)
+## Step 3 — Run the Frustum Detection Node (Terminal 2)
+
+This node clusters the scored cloud, computes 3D bounding boxes, and tracks them:
+
+```bash
+source /workspace/ros2_ws/install/setup.bash
+
+ros2 run frustum_detection frustum_node --ros-args \
+  -p calib_file:=/workspace/calib.txt
+```
+
+---
+
+## Step 4 — Play the ROS Bag (Terminal 3)
 
 ```bash
 ros2 bag play /workspace/studentProject1/ --loop
@@ -79,93 +70,75 @@ ros2 bag play /workspace/studentProject1/ --loop
 
 ---
 
-## Step 4 — Watch the painting output (Terminal 3)
+## Step 5 — Visualize the Output
 
-```bash
-ros2 topic echo /painting/debug
-```
+You can visualize the pipeline results using either **Foxglove Studio** (recommended for Web-based visualization) or **RViz2** (ROS native).
 
-You will see a line per frame:
-```
-data: 'frame=1 painted=5050 skipped=59070'
-```
+### Option A — Foxglove Studio
 
-- **painted** = LiDAR points that projected onto a detected object
-- **skipped** = points behind the camera, outside the frame, or on background
-
----
-
-## Step 5 — Visualise in Foxglove Studio (Terminal 4)
-
-Start the Foxglove WebSocket bridge:
-
-```bash
-ros2 launch foxglove_bridge foxglove_bridge_launch.xml port:=9090
-```
-
-Then on your **Mac**:
-1. Open [Foxglove Studio](https://app.foxglove.dev) (browser or desktop app)
-2. Click **Open connection** → **Foxglove WebSocket** → `ws://localhost:9090`
-
-Inside Foxglove add these panels:
-- **3D** → subscribe to `/painting/painted_cloud` (set Color mode → RGB) to see the painted point cloud
-- **Image** → subscribe to `/painting/segmentation_overlay` to verify YOLO masks on the camera image
-- **Image** → subscribe to `/blackfly_s/cam0/image_rectified` for the raw camera feed
-- **Raw Messages** → subscribe to `/painting/debug` to watch painted/skipped counts
-
-Port `9090` is automatically forwarded by the devcontainer — no extra configuration needed.
+1. **Start Foxglove Bridge (Terminal 4):**
+   ```bash
+   ros2 launch foxglove_bridge foxglove_bridge_launch.xml port:=9090
+   ```
+2. **Open Foxglove:** Open [Foxglove Studio](https://app.foxglove.dev) in your browser or desktop app on your **Mac**.
+3. **Connect:** Click **Open connection** → **Foxglove WebSocket** → `ws://localhost:9090`.
+4. **Add Panels:**
+   - **3D Panel**: Subscribe to `/painting/painted_cloud` (set **Color mode** to `RGB`) to see the point cloud painted by semantic classes.
+   - **Image Panel**: Subscribe to `/frustum/bev` to view the camera overlay + Bird's Eye View detection panel.
+   - **Image Panel**: Subscribe to `/painting/segmentation_overlay` to verify YOLO instance segmentation masks.
+   - **Image Panel**: Subscribe to `/painting/points_overlay` to view raw points projected onto the camera.
 
 ---
 
-## Optional — Run the pipeline isolation test (no ROS needed)
+### Option B — RViz2 (ROS Native Visualization)
 
-Runs the full pipeline on one bag frame and saves 4 verification images to `/workspace/isolation_output/`:
+> [!NOTE]  
+> Since the Dev Container runs virtualized on macOS, launching GUI applications like RViz2 requires an X11 server (such as [XQuartz](https://www.xquartz.org/)) installed on your Mac, with display forwarding enabled.
 
-```bash
-python3 /workspace/test_pipeline_isolation.py
-```
-
-Output images:
-```
-isolation_output/01_raw_image.jpg          ← original camera frame
-isolation_output/02_yolo_mask.jpg          ← YOLO class mask (colour per class)
-isolation_output/03_overlay.jpg            ← mask blended on image
-isolation_output/04_lidar_projected.jpg    ← LiDAR points on image, coloured by class
-```
-
-If `04_lidar_projected.jpg` shows green dots on the car and red dots on the person, the full pipeline is correct.
-
----
-
-## Optional — Extract frames from the bag
-
-```bash
-cd /workspace
-python3 -c "
-import sys
-sys.path.insert(0, '/workspace/ros2_ws/src/point_painting')
-from point_painting.rosbag_extractor import extract_bag_data
-extract_bag_data(
-    '/workspace/studentProject1/',
-    '/blackfly_s/cam0/image_rectified',
-    '/velodyne/points_raw',
-    'output_data'
-)
-"
-```
+1. **Launch RViz2:**
+   ```bash
+   source /workspace/ros2_ws/install/setup.bash
+   rviz2
+   ```
+2. **Configure Global Options:**
+   - Set **Fixed Frame** to `velodyne`.
+3. **Visualize the Semantically Painted Cloud:**
+   - Click **Add** (bottom left) → **By topic** → select `/painting/painted_cloud` -> `PointCloud2`.
+   - In the display settings for this PointCloud2, change **Color Transformer** to `RGB8`. This displays points in class colors:
+     - 🔴 **Red** = Pedestrians
+     - 🟢 **Green** = Cars / Trucks
+     - 🔵 **Blue** = Bicycles
+     - 🟠 **Orange** = Motorcycles
+4. **Visualize 3D Bounding Boxes & Tracks:**
+   - Click **Add** → **By topic** → select `/frustum/markers` -> `MarkerArray`.
+   - This displays wireframe 3D bounding boxes around tracked objects, color-coded by class.
+5. **Visualize 2D Overlays & BEV Panels:**
+   - Click **Add** → **By topic** → select `/frustum/bev` -> `Image`.
+   - Click **Add** → **By topic** → select `/painting/segmentation_overlay` -> `Image`.
 
 ---
 
-## Optional — Run the standalone tests (no ROS needed)
+## Step 6 — Run the Offline Isolation Test (No ROS 2 needed)
+
+To quickly verify the entire pipeline end-to-end on a single frame without running active ROS nodes or playing a bag, run the isolation test script. It extracts a frame from the bag, runs the projection, YOLO segmentation, point painting, frustum clustering, and tracking offline:
 
 ```bash
-python3 /workspace/ros2_ws/src/point_painting/test/test_painting_node.py
+python3 /workspace/test_pipeline_isolation.py --seed 7
 ```
+*(You can change `--seed <number>` to test different frames in the bag).*
 
-Expected:
-```
-Running test_no_projector_skips_all_points ... PASSED
-Running test_empty_point_cloud ... PASSED
-Running test_class_ids_length_matches_input ... PASSED
-ALL TESTS PASSED
-```
+### What is the `isolation_output/` directory?
+
+The isolation test script outputs verification images to the `isolation_output/` directory at the root of the workspace. This directory is included in `.gitignore` so your local runs will never clutter the Git repository.
+
+The output images generated are:
+1. `01_raw_image.jpg`: The raw camera frame from the bag.
+2. `02_yolo_mask.jpg`: YOLO class segmentation mask.
+3. `03_overlay.jpg`: YOLO mask blended on top of the camera frame.
+4. `04_lidar_projected.jpg`: LiDAR points projected onto the image plane, colored by class.
+5. `05_painted_scores.jpg`: Heatmap representation of per-point painting scores.
+6. `06_detections.jpg`: Camera and Bird's Eye View (BEV) panels showing `FrustumDetector` 3D boxes.
+7. `07_tracked.jpg`: Camera and BEV panels showing tracked objects with tracking IDs.
+
+If `07_tracked.jpg` shows correct bounding boxes around the vehicles/pedestrians, the pipeline is fully functional!
+
