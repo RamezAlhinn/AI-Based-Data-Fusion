@@ -74,13 +74,13 @@ class PaintingNode(Node):
         self._bridge = CvBridge()
         self._frame_count = 0
         self._seg_model = None
-        self._img_queue = []
+        self._latest_img_msg = None
         self._latest_seg_image = None
         self._latest_seg_image_stamp = None
         self._latest_cv_image = None
         self._latest_score_maps = None   # dict: coco_id → (H,W) float32 score map
         self._latest_yolo_results = None
-        self._clock_offset = None  # kept for out-header stamp re-stamping only
+        self._clock_offset = None
 
         # --- Calibration ---
         self.declare_parameter('calib_file', '')
@@ -96,15 +96,13 @@ class PaintingNode(Node):
 
         # --- Segmentation model ---
         self.declare_parameter('checkpoint_path', '')
-        self.declare_parameter('conf_thr', 0.40)
         checkpoint = self.get_parameter('checkpoint_path').get_parameter_value().string_value
-        self._conf_thr = self.get_parameter('conf_thr').get_parameter_value().double_value
 
         try:
             from point_painting.segmentation.yolo_segmentation import load_model
             self._seg_model = load_model(checkpoint if checkpoint else None)
-            self.get_logger().info(
-                f'Segmentation model loaded: {self._seg_model.ckpt_path}')
+            model_name = checkpoint if checkpoint else 'yolo11n-seg.pt (default)'
+            self.get_logger().info(f'Segmentation model loaded: {model_name}')
         except Exception as e:
             self.get_logger().error(f'Failed to load segmentation model: {e}')
             self.get_logger().warn('Node will use raw image channel as label map.')
@@ -122,40 +120,19 @@ class PaintingNode(Node):
         self.get_logger().info('PaintingNode started, waiting for messages...')
 
     def _img_cb(self, msg: Image):
-        """Cache incoming camera frames in a queue to allow timestamp synchronization."""
-        self._img_queue.append(msg)
-        if len(self._img_queue) > 50:
-            self._img_queue.pop(0)
+        """Cache the latest camera frame without triggering painting."""
+        self._latest_img_msg = msg
 
     def _cloud_cb(self, msg: PointCloud2):
         """
         Process the latest LiDAR scan.
         Only runs YOLO segmentation on the cached camera frame if it is new.
         """
-        if not self._img_queue:
+        if self._latest_img_msg is None:
             return
 
-        # Find the camera frame with the closest timestamp to this LiDAR scan.
-        # Use the closest match unconditionally — the sensors may run on different
-        # hardware clocks with a large offset, so a hard cutoff would drop everything.
-        t_cloud = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
-        best_img = None
-        best_diff = float('inf')
-        for img in self._img_queue:
-            t_img = img.header.stamp.sec + img.header.stamp.nanosec * 1e-9
-            diff = abs(t_cloud - t_img)
-            if diff < best_diff:
-                best_diff = diff
-                best_img = img
-
-        if best_img is None:
-            return
-        img_msg = best_img
+        img_msg = self._latest_img_msg
         img_stamp = (img_msg.header.stamp.sec, img_msg.header.stamp.nanosec)
-
-        if self._frame_count == 0:
-            self.get_logger().info(
-                f'First frame sync: LiDAR-camera stamp diff = {best_diff:.4f}s')
 
         if self._latest_seg_image is None or self._latest_seg_image_stamp != img_stamp:
             cv_image = self._bridge.imgmsg_to_cv2(img_msg, desired_encoding='passthrough')
@@ -164,15 +141,11 @@ class PaintingNode(Node):
                     segment_image, build_score_maps)
                 pil_image = PilImage.fromarray(cv_image[..., ::-1])
                 img_rgb = np.array(pil_image)
-                # Run YOLO once — get both the class mask and score maps.
-                # Use the same conf_thr as the frustum_node so scored_cloud
-                # and detection masks are built from identical YOLO outputs.
+                # Run YOLO once — get both the class mask and score maps
                 seg_image, yolo_results = segment_image(self._seg_model, pil_image,
-                                                        return_results=True,
-                                                        conf=self._conf_thr)
+                                                        return_results=True)
                 try:
-                    score_maps = build_score_maps(img_rgb, yolo_results,
-                                                  conf=self._conf_thr)
+                    score_maps = build_score_maps(img_rgb, yolo_results)
                 except Exception:
                     score_maps = {}
             else:
@@ -189,9 +162,16 @@ class PaintingNode(Node):
         cv_image = self._latest_cv_image
         seg_image = self._latest_seg_image
 
-        # Use the matched image's timestamp for the output header so that
-        # painted_cloud and raw_cloud_aligned are stamped in the bag clock domain.
-        t_out = img_msg.header.stamp.sec + img_msg.header.stamp.nanosec * 1e-9
+        # Estimate clock domain offset dynamically on first frame pair
+        if self._clock_offset is None:
+            t_img = img_msg.header.stamp.sec + img_msg.header.stamp.nanosec * 1e-9
+            t_lidar = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+            self._clock_offset = t_img - t_lidar
+            self.get_logger().info(f'Estimated Camera-to-LiDAR clock offset: {self._clock_offset:.6f} seconds')
+
+        # Translate monotonic LiDAR stamp to Unix epoch clock domain
+        t_lidar = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+        t_out = t_lidar + self._clock_offset
 
         from rclpy.time import Time
         out_header = Header()

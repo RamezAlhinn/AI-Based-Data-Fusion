@@ -89,7 +89,6 @@ class FrustumNode(Node):
         calib_file    = self.get_parameter('calib_file').value
         checkpoint    = self.get_parameter('checkpoint_path').value
         conf_thr      = self.get_parameter('conf_thr').value
-        self._conf_thr = conf_thr
         min_pts       = self.get_parameter('min_pts').value
         max_age       = self.get_parameter('max_age').value
         min_hits      = self.get_parameter('min_hits').value
@@ -112,7 +111,7 @@ class FrustumNode(Node):
             from point_painting.segmentation.yolo_segmentation import load_model
             self._yolo_model = load_model(checkpoint if checkpoint else None)
             self.get_logger().info(
-                f'YOLO model loaded: {self._yolo_model.ckpt_path}'
+                f'YOLO model loaded: {checkpoint or "yolo11n-seg.pt (default)"}'
             )
         except Exception as e:
             self.get_logger().error(f'Failed to load YOLO model: {e}')
@@ -133,7 +132,7 @@ class FrustumNode(Node):
 
         # ── State ─────────────────────────────────────────────────────────────
         self._bridge           = CvBridge()
-        self._img_queue        = []
+        self._latest_img_msg   = None
         self._cached_stamp     = None
         self._cached_yolo      = None       # YOLO results for cached stamp
         self._cached_cv_bgr    = None       # OpenCV BGR image for visualisation
@@ -158,10 +157,8 @@ class FrustumNode(Node):
     # ── Callbacks ─────────────────────────────────────────────────────────────
 
     def _img_cb(self, msg: Image) -> None:
-        """Cache incoming camera frames in a queue to allow timestamp synchronization."""
-        self._img_queue.append(msg)
-        if len(self._img_queue) > 50:
-            self._img_queue.pop(0)
+        """Cache the latest camera frame."""
+        self._latest_img_msg = msg
 
     def _cloud_cb(self, msg: PointCloud2) -> None:
         """
@@ -169,26 +166,10 @@ class FrustumNode(Node):
         """
         if self._projector is None or self._yolo_model is None:
             return
-        if not self._img_queue:
+        if self._latest_img_msg is None:
             return
 
-        # Find the image frame with the closest timestamp to the cloud message's stamp.
-        # Use the closest match unconditionally — the sensors may run on different
-        # hardware clocks with a large offset, so a hard cutoff would drop everything.
-        t_cloud = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
-        best_img = None
-        best_diff = float('inf')
-        for img in self._img_queue:
-            t_img = img.header.stamp.sec + img.header.stamp.nanosec * 1e-9
-            diff = abs(t_cloud - t_img)
-            if diff < best_diff:
-                best_diff = diff
-                best_img = img
-
-        if best_img is None:
-            return
-
-        img_msg = best_img
+        img_msg = self._latest_img_msg
         img_stamp = (img_msg.header.stamp.sec, img_msg.header.stamp.nanosec)
 
         # ── Run YOLO only when image is new ───────────────────────────────────
@@ -205,7 +186,7 @@ class FrustumNode(Node):
 
             h, w = img_rgb.shape[:2]
             yolo_results = self._yolo_model(
-                img_rgb, verbose=False, conf=self._conf_thr, imgsz=(h, w))
+                img_rgb, verbose=False, conf=0.40, imgsz=(h, w))
 
             self._cached_stamp  = img_stamp
             self._cached_yolo   = yolo_results
@@ -221,8 +202,7 @@ class FrustumNode(Node):
         if not raw:
             return
 
-        import numpy.lib.recfunctions as rfn
-        scored = rfn.structured_to_unstructured(np.array(raw), dtype=np.float32)   # (N, 8)
+        scored = np.array(raw, dtype=np.float32)   # (N, 8)
         lidar_filtered = scored                     # FrustumDetector uses cols 0-2
 
         # ── Detect ────────────────────────────────────────────────────────────
@@ -319,66 +299,6 @@ class FrustumNode(Node):
                 m.points.extend([p0, p1])
 
             marker_array.markers.append(m)
-
-        # Publish tracked boxes and labels
-        for t in tracked:
-            cx, cy, cz, dx, dy, dz, heading = t.box7
-            bgr = CLASS_COLORS_BGR.get(t.cls_id, (200, 200, 200))
-            r, g, b = bgr[2]/255., bgr[1]/255., bgr[0]/255.
-
-            # 3D Box marker
-            m = Marker()
-            m.header = header
-            m.ns     = 'frustum_tracks'
-            m.id     = t.track_id
-            m.type   = Marker.LINE_LIST
-            m.action = Marker.ADD
-            m.scale.x = 0.08  # Thicker than raw detections
-            m.color.r = r
-            m.color.g = g
-            m.color.b = b
-            m.color.a = 0.95
-
-            # Calculate corners of the tracked box
-            c_yaw, s_yaw = np.cos(heading), np.sin(heading)
-            hl, hw, hh = dx/2, dy/2, dz/2
-            loc = np.array([
-                [ hl, hw,-hh],[ hl,-hw,-hh],[-hl,-hw,-hh],[-hl, hw,-hh],
-                [ hl, hw, hh],[ hl,-hw, hh],[-hl,-hw, hh],[-hl, hw, hh],
-            ], dtype=np.float32)
-            R = np.array([[c_yaw,-s_yaw,0.],[s_yaw,c_yaw,0.],[0.,0.,1.]], dtype=np.float32)
-            corners = (R @ loc.T).T + np.array([cx, cy, cz])
-
-            for i, j in _EDGES:
-                from geometry_msgs.msg import Point
-                p0 = Point(x=float(corners[i,0]),
-                           y=float(corners[i,1]),
-                           z=float(corners[i,2]))
-                p1 = Point(x=float(corners[j,0]),
-                           y=float(corners[j,1]),
-                           z=float(corners[j,2]))
-                m.points.extend([p0, p1])
-
-            marker_array.markers.append(m)
-
-            # Text label marker above the box
-            ml = Marker()
-            ml.header = header
-            ml.ns     = 'frustum_track_labels'
-            ml.id     = t.track_id
-            ml.type   = Marker.TEXT_VIEW_FACING
-            ml.action = Marker.ADD
-            ml.pose.position.x = float(cx)
-            ml.pose.position.y = float(cy)
-            ml.pose.position.z = float(cz + dz/2 + 0.5)
-            ml.scale.z = 0.6  # Text size
-            ml.color.r = 1.0  # Bright yellow/white for labels
-            ml.color.g = 1.0
-            ml.color.b = 0.0
-            ml.color.a = 1.0
-            ml.text    = f"{t.cls_name} ID:{t.track_id}"
-
-            marker_array.markers.append(ml)
 
         self._marker_pub.publish(marker_array)
 

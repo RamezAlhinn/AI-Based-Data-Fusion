@@ -60,25 +60,6 @@ _SCORE_COL: dict[int, int] = {0: 5, 1: 7, 2: 6}  # internal_cls → column
 GROUND_Z_THRESH = -1.5   # metres — Velodyne frame (z-up)
 
 
-# Class-specific dimension constraints: (min_dx, min_dy, min_dz, max_dx, max_dy, max_dz)
-# internal_cls: 0=Pedestrian, 1=Cyclist, 2=Car
-#
-# Pedestrian notes:
-#   - min_dz was 1.5 but the ground filter (z < -1.5 m) often clips the feet,
-#     leaving a torso cluster only ~0.8-1.0 m tall.  Clamping to 1.5 m then
-#     pushes the box centre upward, making the box appear to float.  Use 1.0 m
-#     so the box sits on the actual cluster, then the bottom-anchor in the fit
-#     step places it correctly.
-#   - max_dz raised to 2.2 to cover tall people with hats/umbrellas.
-#   - min_dx/min_dy relaxed to 0.3 so a very thin edge-on silhouette still
-#     produces a valid box rather than an artificially widened one.
-_CLASS_DIM_BOUNDS: dict[int, tuple] = {
-    0: (0.3, 0.3, 1.0, 0.9, 0.9, 2.2),    # Pedestrian
-    1: (1.0, 0.4, 1.2, 2.0, 0.9, 2.0),    # Cyclist
-    2: (2.5, 1.4, 1.1, 5.5, 2.4, 2.0),    # Car / bus / truck
-}
-
-
 # ──────────────────────────────────────────────────────────────────────────────
 #  Detection3D
 # ──────────────────────────────────────────────────────────────────────────────
@@ -160,34 +141,21 @@ class FrustumDetector:
     use_dbscan : if True run intra-frustum DBSCAN to strip background clutter
     """
 
-    # (dbscan_eps_m, depth_max_m) per COCO class.
-    # eps must be smaller than the object itself so DBSCAN isolates the object
-    # cluster and does not absorb background returns behind it.
-    # Person body width ~0.4 m → eps=0.6 m catches the full body without merging
-    # into nearby walls/posts.  Car width ~1.8 m → eps=1.2 m is safe.
+    # (dbscan_eps_m, depth_max_m) per COCO class
     _COCO_CFG: dict[int, tuple] = {
-        0: (0.6, 40.0),   # person      — body ~0.4 m wide
-        1: (0.8, 40.0),   # bicycle     — ~0.6 m wide
-        2: (1.2, 80.0),   # car         — ~1.8 m wide
-        3: (0.8, 40.0),   # motorcycle  — ~0.8 m wide
-        5: (2.0, 80.0),   # bus         — ~2.5 m wide
-        7: (2.0, 80.0),   # truck       — ~2.5 m wide
+        0: (1.5, 40.0),   # person
+        1: (1.5, 40.0),   # bicycle
+        2: (2.5, 80.0),   # car
+        3: (1.5, 40.0),   # motorcycle
+        5: (3.0, 80.0),   # bus
+        7: (3.0, 80.0),   # truck
     }
-    _DEFAULT_CFG = (1.0, 60.0)
-
-    # Minimum inlier points per class after all filters.
-    # Pedestrians are sparse (few LiDAR returns on a thin body) so allow 2.
-    # Cyclists and cars have larger cross-sections — stricter gates reduce FP.
-    _MIN_PTS: dict[int, int] = {
-        0: 2,   # Pedestrian — accept as few as 2 after PP + DBSCAN
-        1: 3,   # Cyclist
-        2: 4,   # Car
-    }
+    _DEFAULT_CFG = (2.0, 60.0)
 
     def __init__(self, conf_thr: float = 0.40, min_pts: int = 4,
                  use_dbscan: bool = True):
         self.conf_thr   = conf_thr
-        self.min_pts    = min_pts   # used as fallback / DBSCAN min_samples
+        self.min_pts    = min_pts
         self.use_dbscan = use_dbscan
 
     # ── public API ────────────────────────────────────────────────────────────
@@ -228,12 +196,9 @@ class FrustumDetector:
         cam_pts = projector.lidar_to_camera(lidar_filtered[:, :3])
         front   = cam_pts[:, 2] > 0
 
-        # Homogenise cam_pts → (M, 4) with w=1 to use the full P2 projection matrix
-        # (correctly handles baseline translation column P2[:, 3])
-        cam_pts_h = np.hstack([cam_pts[front], np.ones((front.sum(), 1))])
-        uv_h      = (projector.P2 @ cam_pts_h.T).T
-        depths    = uv_h[:, 2]
-        uv        = uv_h[:, :2] / uv_h[:, 2:3]
+        uv_h   = (projector.P2[:, :3] @ cam_pts[front].T).T   # (M, 3)
+        depths = uv_h[:, 2]                                     # (M,)
+        uv     = uv_h[:, :2] / uv_h[:, 2:3]                   # (M, 2)
 
         front_idx = np.where(front)[0]
 
@@ -263,7 +228,6 @@ class FrustumDetector:
 
                 eps_m, depth_max = self._COCO_CFG.get(coco_cls, self._DEFAULT_CFG)
                 internal_cls     = COCO_TO_INTERNAL[coco_cls]
-                min_pts_cls      = self._MIN_PTS.get(internal_cls, self.min_pts)
 
                 # Binary mask at full image resolution
                 mask_bin = cv2.resize(
@@ -273,7 +237,7 @@ class FrustumDetector:
 
                 # LiDAR points inside this mask AND within depth limit
                 in_mask = mask_bin[v_int, u_int] & (depth_in < depth_max)
-                if in_mask.sum() < min_pts_cls:
+                if in_mask.sum() < self.min_pts:
                     continue
 
                 pts3d = lidar_filtered[lidar_idx[in_mask], :3]   # (K, 3)
@@ -284,18 +248,12 @@ class FrustumDetector:
                 paint_discarded = 0
 
                 if scored_cloud is not None and scored_cloud.shape[1] >= 8:
-                    col_idx      = _SCORE_COL[internal_cls]
-                    paint_scores = scored_cloud[lidar_idx[in_mask], col_idx]
-                    # Normalize threshold by YOLO confidence so the effective
-                    # mask coverage fraction is constant (~15%) regardless of
-                    # detection confidence.  Without this, a pedestrian at
-                    # conf=0.5 has peak score 0.5 and an absolute threshold of
-                    # 0.15 would clip everything below the 30% mask contour —
-                    # discarding most of the sparse LiDAR returns on the person.
-                    keep_paint   = paint_scores > 0.15 * float(conf_score)
+                    col_idx        = _SCORE_COL[internal_cls]
+                    paint_scores   = scored_cloud[lidar_idx[in_mask], col_idx]
+                    keep_paint     = paint_scores > 0.15
                     pts3d_filtered = pts3d[keep_paint]
 
-                    if len(pts3d_filtered) >= min_pts_cls:
+                    if len(pts3d_filtered) >= self.min_pts:
                         paint_filtered  = True
                         paint_kept      = len(pts3d_filtered)
                         paint_discarded = len(pts3d) - paint_kept
@@ -304,15 +262,15 @@ class FrustumDetector:
                         paint_discarded = len(pts3d) - len(pts3d_filtered)
 
                 # ── Intra-frustum DBSCAN ───────────────────────────────────────
-                if self.use_dbscan and len(pts3d) >= min_pts_cls * 2:
+                if self.use_dbscan and len(pts3d) >= self.min_pts * 2:
                     labels   = DBSCAN(eps=eps_m,
-                                      min_samples=min_pts_cls).fit_predict(pts3d)
+                                      min_samples=self.min_pts).fit_predict(pts3d)
                     valid    = labels[labels >= 0]
                     if len(valid) == 0:
                         continue
                     main_lbl = int(np.argmax(np.bincount(valid)))
                     pts3d    = pts3d[labels == main_lbl]
-                    if len(pts3d) < min_pts_cls:
+                    if len(pts3d) < self.min_pts:
                         continue
 
                 # ── Fit 3-D axis-aligned bounding box ─────────────────────────
@@ -320,17 +278,6 @@ class FrustumDetector:
                 maxs   = pts3d.max(0)
                 centre = (mins + maxs) / 2.0
                 dims   = maxs - mins + 1e-3
-
-                # Apply dimension bounds and anchor the bottom of the box
-                if internal_cls in _CLASS_DIM_BOUNDS:
-                    min_dx, min_dy, min_dz, max_dx, max_dy, max_dz = _CLASS_DIM_BOUNDS[internal_cls]
-                    dx = np.clip(dims[0], min_dx, max_dx)
-                    dy = np.clip(dims[1], min_dy, max_dy)
-                    dz = np.clip(dims[2], min_dz, max_dz)
-                    
-                    # Anchor the bottom of the box at the lowest point of the cluster
-                    centre[2] = mins[2] + dz / 2.0
-                    dims = np.array([dx, dy, dz], dtype=np.float32)
 
                 # PCA heading (skip for pedestrians — clusters too small)
                 heading = 0.0
@@ -684,8 +631,7 @@ def draw_combined(
         cp = projector.lidar_to_camera(pt3d.reshape(1, 3).astype(np.float32))
         if cp[0, 2] <= 0:
             return None
-        cp_h = np.hstack([cp, np.ones((1, 1))])
-        uv = (projector.P2 @ cp_h.T).T
+        uv = (projector.P2[:, :3] @ cp.T).T
         uv = uv[:, :2] / uv[:, 2:3]
         u, v = int(uv[0, 0]), int(uv[0, 1])
         if -300 < u < w_cam + 300 and -300 < v < h_cam + 300:

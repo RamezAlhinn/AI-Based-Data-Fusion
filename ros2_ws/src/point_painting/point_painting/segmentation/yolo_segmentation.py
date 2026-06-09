@@ -42,19 +42,18 @@ def load_model(checkpoint_path: str = None):
     if checkpoint_path:
         model_path = checkpoint_path
     else:
-        # Prefer the medium model (better accuracy) over nano.
-        # Search order: medium first, then nano, then auto-download nano as last resort.
+        # Find model in workspace or default to yolo11n-seg.pt (fastest)
         possible_paths = [
-            '/workspace/models/yolo11m-seg.pt',
             '/workspace/models/yolo11n-seg.pt',
-            '/workspace/yolo11m-seg.pt',
-            '/workspace/ros2_ws/yolo11m-seg.pt',
-            os.path.join(os.path.dirname(__file__), '../../../../models/yolo11m-seg.pt'),
-            os.path.join(os.path.dirname(__file__), '../../../../../../models/yolo11m-seg.pt'),
+            '/workspace/models/yolo11m-seg.pt',
             '/workspace/yolo11n-seg.pt',
             '/workspace/ros2_ws/yolo11n-seg.pt',
             os.path.join(os.path.dirname(__file__), '../../../../models/yolo11n-seg.pt'),
             os.path.join(os.path.dirname(__file__), '../../../../../../models/yolo11n-seg.pt'),
+            os.path.join(os.path.dirname(__file__), '../../../../yolo11n-seg.pt'),
+            os.path.join(os.path.dirname(__file__), '../../../../../../yolo11n-seg.pt'),
+            '/workspace/yolo11m-seg.pt',
+            '/workspace/ros2_ws/yolo11m-seg.pt',
             'yolo11n-seg.pt'
         ]
         model_path = 'yolo11n-seg.pt'
@@ -68,8 +67,7 @@ def load_model(checkpoint_path: str = None):
 
 
 def segment_image(model, image: Image.Image,
-                  return_results: bool = False,
-                  conf: float = 0.40):
+                  return_results: bool = False):
     """
     Run YOLO instance segmentation on a PIL image.
     Returns a (H, W) array with native YOLO/COCO class IDs per pixel, -1 = background.
@@ -85,7 +83,7 @@ def segment_image(model, image: Image.Image,
     h, w = img_np.shape[:2]
 
     # Prevent letterboxing by passing imgsz=(h, w)
-    results = model(img_np, verbose=False, conf=conf, imgsz=(h, w))
+    results = model(img_np, verbose=False, conf=0.25, imgsz=(h, w))
     label_mask = np.full((h, w), -1, dtype=np.int32)  # -1 = background/no detection
 
     # Priority order: vehicles first, vulnerable road users last so they

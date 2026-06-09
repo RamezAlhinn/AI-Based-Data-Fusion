@@ -79,8 +79,6 @@ sys.path.insert(0, '/workspace/ros2_ws/src/perception_framework')
 sys.path.insert(0, '/workspace/ros2_ws/install/perception_framework/lib/python3.10/site-packages')
 sys.path.insert(0, '/workspace/ros2_ws/src/point_painting')
 sys.path.insert(0, '/workspace/ros2_ws/install/point_painting/lib/python3.10/site-packages')
-sys.path.insert(0, '/workspace/ros2_ws/src/frustum_detection')
-sys.path.insert(0, '/workspace/ros2_ws/install/frustum_detection/lib/python3.10/site-packages')
 
 # COCO class colours (BGR for OpenCV)
 CLASS_COLORS_BGR = {
