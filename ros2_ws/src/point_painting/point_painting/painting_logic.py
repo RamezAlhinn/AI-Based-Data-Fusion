@@ -131,11 +131,27 @@ def paint_points(points_xyz: np.ndarray, seg_image: np.ndarray):
 _COCO_TO_SCORE_COL = {0: 5, 2: 6, 5: 6, 7: 6, 1: 7, 3: 7}
 
 
+# Per-COCO-class half-depth window for instance-level painting.
+# Keeps only LiDAR points within ±window of the instance median depth.
+# Sized to the physical depth of each object class so background points
+# behind the object are excluded.  Values in metres (half-window, one-sided).
+#   person/bicycle/motorcycle: ~0.4 m deep → 0.6 m gives a little margin
+#   car/bus/truck:             ~4 m deep   → 2.5 m covers the longest vehicle
+_COCO_DEPTH_WINDOW: dict = {
+    0: 0.6,   # person
+    1: 0.8,   # bicycle
+    2: 2.5,   # car
+    3: 0.8,   # motorcycle
+    5: 3.0,   # bus
+    7: 3.0,   # truck
+}
+_DEFAULT_DEPTH_WINDOW = 1.5
+
+
 def paint_points_scored(
     points_xyz: np.ndarray,
     score_maps: dict,
     yolo_results: list = None,
-    depth_window: float = 3.0,
 ) -> np.ndarray:
     """
     Project LiDAR points and return a scored cloud for the frustum_detection node.
@@ -147,10 +163,9 @@ def paint_points_scored(
                  Keys must include at least the COCO IDs present in
                  _COCO_TO_SCORE_COL (0, 1, 2, 3, 5, 7).
     yolo_results : list of Ultralytics YOLO Results (optional).
-                   If provided, instance-level depth filtering is applied to resolve
-                   background bleeding.
-    depth_window : float (default: 3.0 meters)
-                   The window size around the median depth of an instance to consider points valid.
+                   If provided, instance-level depth filtering is applied using
+                   per-class windows from _COCO_DEPTH_WINDOW to prevent background
+                   bleeding.
 
     Returns
     -------
@@ -245,8 +260,12 @@ def paint_points_scored(
                 # Compute median depth of points projecting inside this mask
                 med_depth = np.median(depths_in[inside_mask])
 
-                # Keep only points within depth window of the median depth
-                depth_mask = (depths_in >= med_depth - depth_window) & (depths_in <= med_depth + depth_window)
+                # Keep only points within the per-class depth half-window of
+                # the instance median.  Using a class-specific window prevents
+                # background points 3 m behind a pedestrian from receiving a
+                # person score while still covering a full car or bus.
+                win = _COCO_DEPTH_WINDOW.get(cls_id, _DEFAULT_DEPTH_WINDOW)
+                depth_mask = (depths_in >= med_depth - win) & (depths_in <= med_depth + win)
                 valid_paint = inside_mask & depth_mask
 
                 if not valid_paint.any():

@@ -67,7 +67,8 @@ def load_model(checkpoint_path: str = None):
 
 
 def segment_image(model, image: Image.Image,
-                  return_results: bool = False):
+                  return_results: bool = False,
+                  conf: float = 0.40):
     """
     Run YOLO instance segmentation on a PIL image.
     Returns a (H, W) array with native YOLO/COCO class IDs per pixel, -1 = background.
@@ -83,7 +84,7 @@ def segment_image(model, image: Image.Image,
     h, w = img_np.shape[:2]
 
     # Prevent letterboxing by passing imgsz=(h, w)
-    results = model(img_np, verbose=False, conf=0.25, imgsz=(h, w))
+    results = model(img_np, verbose=False, conf=conf, imgsz=(h, w))
     label_mask = np.full((h, w), -1, dtype=np.int32)  # -1 = background/no detection
 
     # Priority order: vehicles first, vulnerable road users last so they

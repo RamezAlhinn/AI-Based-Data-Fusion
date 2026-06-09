@@ -58,9 +58,10 @@ class PaintingNode(Node):
     """
     ROS 2 node that implements the PointPainting fusion algorithm.
 
-    On every incoming LiDAR scan, finds the camera frame with the closest
-    timestamp from a rolling 50-frame queue (both sensors share the ROS bag
-    clock so direct timestamp matching works), then:
+    On every incoming LiDAR scan or camera frame, pairs the latest message
+    from each topic (latest-message cache instead of time synchronisation —
+    the two sensors were recorded with different clocks in the bag so
+    timestamp-based sync never fires), then:
 
       1. Runs YOLO26n-seg on the camera frame to get a per-pixel class mask.
       2. Projects all LiDAR points onto the mask using the KITTI calibration.
@@ -95,7 +96,9 @@ class PaintingNode(Node):
 
         # --- Segmentation model ---
         self.declare_parameter('checkpoint_path', '')
+        self.declare_parameter('conf_thr', 0.40)
         checkpoint = self.get_parameter('checkpoint_path').get_parameter_value().string_value
+        self._conf_thr = self.get_parameter('conf_thr').get_parameter_value().double_value
 
         try:
             from point_painting.segmentation.yolo_segmentation import load_model
@@ -157,11 +160,15 @@ class PaintingNode(Node):
                     segment_image, build_score_maps)
                 pil_image = PilImage.fromarray(cv_image[..., ::-1])
                 img_rgb = np.array(pil_image)
-                # Run YOLO once — get both the class mask and score maps
+                # Run YOLO once — get both the class mask and score maps.
+                # Use the same conf_thr as the frustum_node so scored_cloud
+                # and detection masks are built from identical YOLO outputs.
                 seg_image, yolo_results = segment_image(self._seg_model, pil_image,
-                                                        return_results=True)
+                                                        return_results=True,
+                                                        conf=self._conf_thr)
                 try:
-                    score_maps = build_score_maps(img_rgb, yolo_results)
+                    score_maps = build_score_maps(img_rgb, yolo_results,
+                                                  conf=self._conf_thr)
                 except Exception:
                     score_maps = {}
             else:
