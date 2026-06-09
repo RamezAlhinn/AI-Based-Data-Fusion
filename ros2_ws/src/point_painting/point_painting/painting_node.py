@@ -7,10 +7,13 @@ point onto the segmentation mask, and attaches the COCO class ID at that
 pixel to the point.
 
 Published topics:
-    /painting/debug               (std_msgs/String)      — painted/skipped counts per frame
-    /painting/painted_cloud       (sensor_msgs/PointCloud2) — full point cloud coloured by class
-    /painting/segmentation_overlay (sensor_msgs/Image)   — YOLO masks blended on camera image
-    /painting/points_overlay      (sensor_msgs/Image)    — projected LiDAR dots on camera image
+    /painting/debug                (std_msgs/String)         — painted/skipped counts per frame
+    /painting/painted_cloud        (sensor_msgs/PointCloud2) — full point cloud coloured by class (Foxglove viz)
+    /painting/scored_cloud         (sensor_msgs/PointCloud2) — scored cloud [x,y,z,int,ring,s_ped,s_car,s_cyc]
+                                                               consumed by the frustum_detection node
+    /painting/raw_cloud_aligned    (sensor_msgs/PointCloud2) — raw LiDAR re-stamped in Unix clock domain
+    /painting/segmentation_overlay (sensor_msgs/Image)       — YOLO masks blended on camera image
+    /painting/points_overlay       (sensor_msgs/Image)       — projected LiDAR dots on camera image
 
 Parameters:
     calib_file      (str) — path to KITTI-format calibration file (calib.txt)
@@ -30,7 +33,7 @@ from cv_bridge import CvBridge
 from PIL import Image as PilImage
 from sensor_msgs_py import point_cloud2 as pc2
 
-from point_painting.painting_logic import init_projector, paint_points
+from point_painting.painting_logic import init_projector, paint_points, paint_points_scored
 
 # COCO class IDs mapped to RGB display colours for Foxglove.
 # -1 = background / no detection — uses UNPAINTED_COLOR instead.
@@ -75,6 +78,7 @@ class PaintingNode(Node):
         self._latest_seg_image = None
         self._latest_seg_image_stamp = None
         self._latest_cv_image = None
+        self._latest_score_maps = None   # dict: coco_id → (H,W) float32 score map
         self._clock_offset = None
 
         # --- Calibration ---
@@ -105,6 +109,7 @@ class PaintingNode(Node):
         # --- Publishers / Subscribers ---
         self._debug_pub = self.create_publisher(String, '/painting/debug', 10)
         self._painted_pub = self.create_publisher(PointCloud2, '/painting/painted_cloud', 10)
+        self._scored_pub = self.create_publisher(PointCloud2, '/painting/scored_cloud', 10)
         self._raw_aligned_pub = self.create_publisher(PointCloud2, '/painting/raw_cloud_aligned', 10)
         self._overlay_pub = self.create_publisher(Image, '/painting/segmentation_overlay', 10)
         self._points_overlay_pub = self.create_publisher(Image, '/painting/points_overlay', 10)
@@ -131,13 +136,23 @@ class PaintingNode(Node):
         if self._latest_seg_image is None or self._latest_seg_image_stamp != img_stamp:
             cv_image = self._bridge.imgmsg_to_cv2(img_msg, desired_encoding='passthrough')
             if self._seg_model is not None:
-                from point_painting.segmentation.yolo_segmentation import segment_image
+                from point_painting.segmentation.yolo_segmentation import (
+                    segment_image, build_score_maps)
                 pil_image = PilImage.fromarray(cv_image[..., ::-1])
-                seg_image = segment_image(self._seg_model, pil_image)
+                img_rgb = np.array(pil_image)
+                # Run YOLO once — get both the class mask and score maps
+                seg_image, yolo_results = segment_image(self._seg_model, pil_image,
+                                                        return_results=True)
+                try:
+                    score_maps = build_score_maps(img_rgb, yolo_results)
+                except Exception:
+                    score_maps = {}
             else:
                 seg_image = cv_image[:, :, 0] if cv_image.ndim == 3 else cv_image
+                score_maps = {}
 
             self._latest_seg_image = seg_image
+            self._latest_score_maps = score_maps
             self._latest_seg_image_stamp = img_stamp
             self._latest_cv_image = cv_image
 
@@ -170,7 +185,14 @@ class PaintingNode(Node):
         xyz = np.array([(p[0], p[1], p[2]) for p in points], dtype=np.float32)
         painted, skipped, class_ids = paint_points(xyz, seg_image)
 
+        # Publish visualization cloud (coloured by class for Foxglove)
         self._publish_painted_cloud(xyz, class_ids, out_header)
+
+        # Publish scored cloud for frustum_detection node
+        score_maps = self._latest_score_maps or {}
+        if score_maps:
+            scored = paint_points_scored(xyz, score_maps)
+            self._publish_scored_cloud(scored, out_header)
 
         self._frame_count += 1
         # Throttle verification overlays to every 5th LiDAR frame
@@ -309,6 +331,36 @@ class PaintingNode(Node):
 
         cloud_msg = pc2.create_cloud(header, fields, cloud_data)
         self._painted_pub.publish(cloud_msg)
+
+    def _publish_scored_cloud(self, scored: np.ndarray, header) -> None:
+        """
+        Publish the scored point cloud on /painting/scored_cloud.
+
+        Column layout (matches paint_points_scored output):
+          0  x          (float32)
+          1  y          (float32)
+          2  z          (float32)
+          3  intensity  (float32, 0.0)
+          4  ring       (float32, 0.0)
+          5  s_ped      pedestrian score [0, 1]
+          6  s_car      car score [0, 1]
+          7  s_cyc      cyclist score [0, 1]
+
+        The frustum_detection node subscribes to this topic and uses columns
+        5-7 to filter LiDAR points inside each YOLO frustum.
+        """
+        fields = [
+            PointField(name='x',         offset=0,  datatype=PointField.FLOAT32, count=1),
+            PointField(name='y',         offset=4,  datatype=PointField.FLOAT32, count=1),
+            PointField(name='z',         offset=8,  datatype=PointField.FLOAT32, count=1),
+            PointField(name='intensity', offset=12, datatype=PointField.FLOAT32, count=1),
+            PointField(name='ring',      offset=16, datatype=PointField.FLOAT32, count=1),
+            PointField(name='s_ped',     offset=20, datatype=PointField.FLOAT32, count=1),
+            PointField(name='s_car',     offset=24, datatype=PointField.FLOAT32, count=1),
+            PointField(name='s_cyc',     offset=28, datatype=PointField.FLOAT32, count=1),
+        ]
+        cloud_msg = pc2.create_cloud(header, fields, scored.tolist())
+        self._scored_pub.publish(cloud_msg)
 
 
 def main(args=None):

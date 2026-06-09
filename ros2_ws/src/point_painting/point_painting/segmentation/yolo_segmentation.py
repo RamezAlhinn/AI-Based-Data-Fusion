@@ -1,9 +1,12 @@
 """
 YOLO instance segmentation wrapper for PointPainting.
 
-Provides two public functions used by the painting node and the isolation test:
+Provides three public functions used by the painting node and the isolation test:
     load_model(checkpoint_path)      — load YOLO11m-seg (auto-downloads if not found)
     segment_image(model, image)      — run segmentation, return (H, W) class ID array
+    build_score_maps(img_rgb, yolo_results)
+                                     — build per-class soft score maps from YOLO results
+                                       (avoids running YOLO twice when both are needed)
 
 Design decisions:
     - YOLO11m-seg is used — the medium model (~42 MB) rather than nano/small.
@@ -63,10 +66,15 @@ def load_model(checkpoint_path: str = None):
     return YOLO(model_path)
 
 
-def segment_image(model, image: Image.Image) -> np.ndarray:
+def segment_image(model, image: Image.Image,
+                  return_results: bool = False):
     """
     Run YOLO instance segmentation on a PIL image.
     Returns a (H, W) array with native YOLO/COCO class IDs per pixel, -1 = background.
+
+    If return_results=True, returns a tuple (label_mask, yolo_results) so the
+    caller can reuse the raw YOLO output for build_score_maps() without a
+    second model forward pass.
 
     COCO class IDs (relevant for driving):
       0=person, 1=bicycle, 2=car, 3=motorcycle, 5=bus, 7=truck
@@ -106,7 +114,75 @@ def segment_image(model, image: Image.Image) -> np.ndarray:
         clean_mask[dilated == 1] = cls_id
     label_mask = clean_mask
 
+    if return_results:
+        return label_mask, results
     return label_mask
+
+
+# COCO class IDs for which we produce score maps
+_SCORE_CLASSES = [0, 1, 2, 3, 5, 7]  # person, bicycle, car, motorcycle, bus, truck
+
+
+def build_score_maps(
+    img_rgb: np.ndarray,
+    yolo_results,
+    conf: float = 0.25,
+) -> dict:
+    """
+    Build per-class soft score maps from pre-computed YOLO results.
+
+    Returns a dict mapping COCO class ID → (H, W) float32 score map in [0, 1].
+    Winner-take-all per pixel prevents cross-class contamination, then a light
+    Gaussian blur smooths mask edges for more robust point-score lookup.
+
+    Parameters
+    ----------
+    img_rgb      : (H, W, 3) uint8 RGB image (used only for shape).
+    yolo_results : raw output from model() — reuse the same call as segment_image.
+    conf         : confidence threshold; instances below this are ignored.
+
+    Returns
+    -------
+    dict: {coco_id: np.ndarray of shape (H, W), dtype float32}
+    """
+    from typing import List, Tuple
+
+    h, w = img_rgb.shape[:2]
+
+    instance_scores: List[Tuple[np.ndarray, int]] = []
+    for result in yolo_results:
+        if result.masks is None:
+            continue
+        masks   = result.masks.data.cpu().numpy()
+        classes = result.boxes.cls.cpu().numpy().astype(int)
+        confs   = result.boxes.conf.cpu().numpy()
+        for mask, cls_id, c in zip(masks, classes, confs):
+            cls_id = int(cls_id)
+            if cls_id not in _SCORE_CLASSES or float(c) < conf:
+                continue
+            m = cv2.resize(
+                (mask * 255).astype(np.uint8), (w, h),
+                interpolation=cv2.INTER_LINEAR,
+            ).astype(np.float32) / 255.0
+            instance_scores.append((m * float(c), cls_id))
+
+    score_maps: dict = {c: np.zeros((h, w), dtype=np.float32) for c in _SCORE_CLASSES}
+
+    if instance_scores:
+        stack   = np.stack([s for s, _ in instance_scores], axis=0)   # (N, H, W)
+        winner  = np.argmax(stack, axis=0)                             # (H, W)
+        any_det = stack.max(axis=0) > 0
+        for idx, (sm, cls_id) in enumerate(instance_scores):
+            owns = (winner == idx) & any_det
+            score_maps[cls_id] = np.maximum(
+                score_maps[cls_id],
+                np.where(owns, sm, 0.0).astype(np.float32),
+            )
+
+    for cls_id in _SCORE_CLASSES:
+        score_maps[cls_id] = cv2.GaussianBlur(score_maps[cls_id], (5, 5), 0)
+
+    return score_maps
 
 
 if __name__ == '__main__':
