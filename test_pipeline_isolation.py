@@ -294,7 +294,7 @@ print('\n[Stage 5] PointPainting — building scored cloud...')
 from point_painting.painting_logic import init_projector, paint_points_scored
 
 init_projector(CALIB_PATH)
-scored = paint_points_scored(lidar_filtered, score_maps)
+scored = paint_points_scored(lidar_filtered, score_maps, yolo_results=yolo_results)
 print(f'  Scored cloud: {scored.shape}  '
       f'[x, y, z, intensity, ring, s_ped, s_car, s_cyc]')
 

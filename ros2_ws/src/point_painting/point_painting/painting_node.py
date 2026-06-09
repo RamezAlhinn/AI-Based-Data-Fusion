@@ -79,6 +79,7 @@ class PaintingNode(Node):
         self._latest_seg_image_stamp = None
         self._latest_cv_image = None
         self._latest_score_maps = None   # dict: coco_id → (H,W) float32 score map
+        self._latest_yolo_results = None
         self._clock_offset = None
 
         # --- Calibration ---
@@ -150,9 +151,11 @@ class PaintingNode(Node):
             else:
                 seg_image = cv_image[:, :, 0] if cv_image.ndim == 3 else cv_image
                 score_maps = {}
+                yolo_results = None
 
             self._latest_seg_image = seg_image
             self._latest_score_maps = score_maps
+            self._latest_yolo_results = yolo_results
             self._latest_seg_image_stamp = img_stamp
             self._latest_cv_image = cv_image
 
@@ -190,8 +193,9 @@ class PaintingNode(Node):
 
         # Publish scored cloud for frustum_detection node
         score_maps = self._latest_score_maps or {}
-        if score_maps:
-            scored = paint_points_scored(xyz, score_maps)
+        yolo_results = self._latest_yolo_results
+        if score_maps or yolo_results:
+            scored = paint_points_scored(xyz, score_maps, yolo_results=yolo_results)
             self._publish_scored_cloud(scored, out_header)
 
         self._frame_count += 1
