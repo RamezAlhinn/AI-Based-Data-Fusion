@@ -89,6 +89,7 @@ class FrustumNode(Node):
         calib_file    = self.get_parameter('calib_file').value
         checkpoint    = self.get_parameter('checkpoint_path').value
         conf_thr      = self.get_parameter('conf_thr').value
+        self._conf_thr = conf_thr
         min_pts       = self.get_parameter('min_pts').value
         max_age       = self.get_parameter('max_age').value
         min_hits      = self.get_parameter('min_hits').value
@@ -203,7 +204,7 @@ class FrustumNode(Node):
 
             h, w = img_rgb.shape[:2]
             yolo_results = self._yolo_model(
-                img_rgb, verbose=False, conf=0.40, imgsz=(h, w))
+                img_rgb, verbose=False, conf=self._conf_thr, imgsz=(h, w))
 
             self._cached_stamp  = img_stamp
             self._cached_yolo   = yolo_results

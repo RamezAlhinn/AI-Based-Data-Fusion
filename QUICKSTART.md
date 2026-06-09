@@ -22,14 +22,18 @@ Camera ──────┴──────────► /blackfly_s/cam0/.
 
 ---
 
-## Step 1 — Build the Workspace (Once per container start)
+## Step 1 — Build the Workspace
 
-Inside the container terminal:
+Run this **after every `git pull`** and on first container start:
+
 ```bash
 cd /workspace/ros2_ws
 colcon build --symlink-install
 source install/setup.bash
 ```
+
+> **Important:** You must rebuild after pulling new code. `--symlink-install` links Python
+> source files directly, but new packages or moved files require a fresh build to register.
 
 ---
 
@@ -45,7 +49,7 @@ ros2 run point_painting painting_node --ros-args \
   -p checkpoint_path:=/workspace/models/yolo11m-seg.pt
 ```
 
-*Note: If `/workspace/models/yolo11m-seg.pt` is not present, it will automatically fall back to downloading the lightweight default model.*
+Wait until you see: `PaintingNode started, waiting for messages...`
 
 ---
 
@@ -57,15 +61,24 @@ This node clusters the scored cloud, computes 3D bounding boxes, and tracks them
 source /workspace/ros2_ws/install/setup.bash
 
 ros2 run frustum_detection frustum_node --ros-args \
-  -p calib_file:=/workspace/calib.txt
+  -p calib_file:=/workspace/calib.txt \
+  -p checkpoint_path:=/workspace/models/yolo11m-seg.pt
 ```
+
+Wait until you see: `FrustumNode started — waiting for scored cloud...`
+
+> **Both nodes must be fully started before playing the bag.** YOLO model loading
+> takes ~5–10 seconds. If the bag plays before the nodes are ready, the first loop
+> is lost. With `--loop` the pipeline will catch up on the next pass.
 
 ---
 
 ## Step 4 — Play the ROS Bag (Terminal 3)
 
+Only start this **after both nodes print their ready message**:
+
 ```bash
-ros2 bag play /workspace/studentProject1/ --loop
+ros2 bag play /workspace/studentProject1 --loop
 ```
 
 ---
@@ -123,7 +136,7 @@ You can visualize the pipeline results using either **Foxglove Studio** (recomme
 To quickly verify the entire pipeline end-to-end on a single frame without running active ROS nodes or playing a bag, run the isolation test script. It extracts a frame from the bag, runs the projection, YOLO segmentation, point painting, frustum clustering, and tracking offline:
 
 ```bash
-python3 /workspace/test_pipeline_isolation.py --seed 7
+python3 /workspace/AI-Based-Data-Fusion/test_pipeline_isolation.py --seed 7
 ```
 *(You can change `--seed <number>` to test different frames in the bag).*
 
@@ -142,3 +155,14 @@ The output images generated are:
 
 If `07_tracked.jpg` shows correct bounding boxes around the vehicles/pedestrians, the pipeline is fully functional!
 
+---
+
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `FrustumNode started — waiting for scored cloud...` never advances | `painting_node` is not running, or bag hasn't played yet | Start both nodes first, then play the bag |
+| `YOLO model loaded: yolo11n-seg.pt` in logs | `checkpoint_path` not passed, or `yolo11m-seg.pt` missing from `/workspace/models/` | Pass `-p checkpoint_path:=/workspace/models/yolo11m-seg.pt` |
+| Nodes crash on import (`No module named 'frustum_detection'`) | Workspace not rebuilt after latest `git pull` | Run `colcon build --symlink-install` again |
+| No topics visible in Foxglove | Foxglove bridge not running, or bag not playing | Start bridge (Terminal 4), verify bag is looping |
+| Detections appear then disappear every loop | AB3DMOT tracker resets between bag loops | Expected — tracker state is in-memory only |
