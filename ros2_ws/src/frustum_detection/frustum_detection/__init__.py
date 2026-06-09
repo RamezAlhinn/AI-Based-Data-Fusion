@@ -31,6 +31,7 @@ if _detector_path is None:
 
 _spec = importlib.util.spec_from_file_location('_frustum_detector_impl', _detector_path)
 _mod  = importlib.util.module_from_spec(_spec)
+sys.modules['_frustum_detector_impl'] = _mod   # required for @dataclass cls.__module__ lookup
 _spec.loader.exec_module(_mod)
 
 FrustumDetector   = _mod.FrustumDetector
