@@ -172,7 +172,9 @@ class FrustumNode(Node):
         if not self._img_queue:
             return
 
-        # Find the image frame with the closest timestamp to the cloud message's stamp
+        # Find the image frame with the closest timestamp to the cloud message's stamp.
+        # Use the closest match unconditionally — the sensors may run on different
+        # hardware clocks with a large offset, so a hard cutoff would drop everything.
         t_cloud = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
         best_img = None
         best_diff = float('inf')
@@ -183,8 +185,7 @@ class FrustumNode(Node):
                 best_diff = diff
                 best_img = img
 
-        # Allow up to 0.15s offset
-        if best_img is None or best_diff > 0.15:
+        if best_img is None:
             return
 
         img_msg = best_img

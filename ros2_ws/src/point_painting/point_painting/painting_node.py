@@ -136,8 +136,8 @@ class PaintingNode(Node):
             return
 
         # Find the camera frame with the closest timestamp to this LiDAR scan.
-        # Both sensors are published from the same bag and share the same ROS clock
-        # domain, so we do direct timestamp matching (no clock-offset needed).
+        # Use the closest match unconditionally — the sensors may run on different
+        # hardware clocks with a large offset, so a hard cutoff would drop everything.
         t_cloud = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
         best_img = None
         best_diff = float('inf')
@@ -148,10 +148,14 @@ class PaintingNode(Node):
                 best_diff = diff
                 best_img = img
 
-        if best_img is None or best_diff > 0.15:
+        if best_img is None:
             return
         img_msg = best_img
         img_stamp = (img_msg.header.stamp.sec, img_msg.header.stamp.nanosec)
+
+        if self._frame_count == 0:
+            self.get_logger().info(
+                f'First frame sync: LiDAR-camera stamp diff = {best_diff:.4f}s')
 
         if self._latest_seg_image is None or self._latest_seg_image_stamp != img_stamp:
             cv_image = self._bridge.imgmsg_to_cv2(img_msg, desired_encoding='passthrough')
