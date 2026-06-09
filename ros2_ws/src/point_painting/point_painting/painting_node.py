@@ -58,10 +58,9 @@ class PaintingNode(Node):
     """
     ROS 2 node that implements the PointPainting fusion algorithm.
 
-    On every incoming LiDAR scan or camera frame, pairs the latest message
-    from each topic (latest-message cache instead of time synchronisation —
-    the two sensors were recorded with different clocks in the bag so
-    timestamp-based sync never fires), then:
+    On every incoming LiDAR scan, finds the camera frame with the closest
+    timestamp from a rolling 50-frame queue (both sensors share the ROS bag
+    clock so direct timestamp matching works), then:
 
       1. Runs YOLO26n-seg on the camera frame to get a per-pixel class mask.
       2. Projects all LiDAR points onto the mask using the KITTI calibration.
@@ -74,13 +73,13 @@ class PaintingNode(Node):
         self._bridge = CvBridge()
         self._frame_count = 0
         self._seg_model = None
-        self._latest_img_msg = None
+        self._img_queue = []
         self._latest_seg_image = None
         self._latest_seg_image_stamp = None
         self._latest_cv_image = None
         self._latest_score_maps = None   # dict: coco_id → (H,W) float32 score map
         self._latest_yolo_results = None
-        self._clock_offset = None
+        self._clock_offset = None  # kept for out-header stamp re-stamping only
 
         # --- Calibration ---
         self.declare_parameter('calib_file', '')
@@ -120,18 +119,35 @@ class PaintingNode(Node):
         self.get_logger().info('PaintingNode started, waiting for messages...')
 
     def _img_cb(self, msg: Image):
-        """Cache the latest camera frame without triggering painting."""
-        self._latest_img_msg = msg
+        """Cache incoming camera frames in a queue to allow timestamp synchronization."""
+        self._img_queue.append(msg)
+        if len(self._img_queue) > 50:
+            self._img_queue.pop(0)
 
     def _cloud_cb(self, msg: PointCloud2):
         """
         Process the latest LiDAR scan.
         Only runs YOLO segmentation on the cached camera frame if it is new.
         """
-        if self._latest_img_msg is None:
+        if not self._img_queue:
             return
 
-        img_msg = self._latest_img_msg
+        # Find the camera frame with the closest timestamp to this LiDAR scan.
+        # Both sensors are published from the same bag and share the same ROS clock
+        # domain, so we do direct timestamp matching (no clock-offset needed).
+        t_cloud = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+        best_img = None
+        best_diff = float('inf')
+        for img in self._img_queue:
+            t_img = img.header.stamp.sec + img.header.stamp.nanosec * 1e-9
+            diff = abs(t_cloud - t_img)
+            if diff < best_diff:
+                best_diff = diff
+                best_img = img
+
+        if best_img is None or best_diff > 0.15:
+            return
+        img_msg = best_img
         img_stamp = (img_msg.header.stamp.sec, img_msg.header.stamp.nanosec)
 
         if self._latest_seg_image is None or self._latest_seg_image_stamp != img_stamp:
@@ -162,16 +178,9 @@ class PaintingNode(Node):
         cv_image = self._latest_cv_image
         seg_image = self._latest_seg_image
 
-        # Estimate clock domain offset dynamically on first frame pair
-        if self._clock_offset is None:
-            t_img = img_msg.header.stamp.sec + img_msg.header.stamp.nanosec * 1e-9
-            t_lidar = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
-            self._clock_offset = t_img - t_lidar
-            self.get_logger().info(f'Estimated Camera-to-LiDAR clock offset: {self._clock_offset:.6f} seconds')
-
-        # Translate monotonic LiDAR stamp to Unix epoch clock domain
-        t_lidar = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
-        t_out = t_lidar + self._clock_offset
+        # Use the matched image's timestamp for the output header so that
+        # painted_cloud and raw_cloud_aligned are stamped in the bag clock domain.
+        t_out = img_msg.header.stamp.sec + img_msg.header.stamp.nanosec * 1e-9
 
         from rclpy.time import Time
         out_header = Header()
