@@ -33,7 +33,39 @@ source install/setup.bash
 
 ---
 
-## Step 2 — Run the PointPainting Node (Terminal 1)
+## Option A — Running via Helper Scripts (Recommended)
+
+You can launch or stop the entire pipeline (including bag playback, Foxglove bridge, painting, and frustum nodes) automatically in the background using the provided helper scripts.
+
+### 1. Start the Pipeline
+```bash
+bash /workspace/start_pipeline.sh
+```
+This runs all the nodes in the background, redirects output to `/workspace/log/*.log`, and waits ~12 seconds for the nodes to initialize.
+
+### 2. Stop the Pipeline
+To stop all background processes started by the pipeline:
+```bash
+bash /workspace/stop_pipeline.sh
+```
+
+### 3. Check Logs
+To monitor the nodes in real time, you can tail the log files:
+```bash
+# Painting node logs
+tail -f /workspace/log/painting_node_live.log
+
+# Frustum detection node logs
+tail -f /workspace/log/frustum_node_live.log
+```
+
+---
+
+## Option B — Running Components Individually (Manual)
+
+If you prefer to run each component in its own terminal to inspect standard output in real-time, open multiple terminal tabs in VS Code (`Ctrl+Shift+``) and run the following:
+
+### Step 2 — Run the PointPainting Node (Terminal 1)
 
 This node performs camera-LiDAR projection and YOLO segmentation to score the point cloud:
 
@@ -49,7 +81,7 @@ ros2 run point_painting painting_node --ros-args \
 
 ---
 
-## Step 3 — Run the Frustum Detection Node (Terminal 2)
+### Step 3 — Run the Frustum Detection Node (Terminal 2)
 
 This node clusters the scored cloud, computes 3D bounding boxes, and tracks them:
 
@@ -62,7 +94,7 @@ ros2 run frustum_detection frustum_node --ros-args \
 
 ---
 
-## Step 4 — Play the ROS Bag (Terminal 3)
+### Step 4 — Play the ROS Bag (Terminal 3)
 
 ```bash
 ros2 bag play /workspace/studentProject1/ --loop

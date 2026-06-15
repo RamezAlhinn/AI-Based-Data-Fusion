@@ -141,16 +141,34 @@ class FrustumDetector:
     use_dbscan : if True run intra-frustum DBSCAN to strip background clutter
     """
 
-    # (dbscan_eps_m, depth_max_m) per COCO class
+    # (dbscan_eps_m, depth_max_m, depth_window_m) per COCO class.
+    # depth_window_m: max range *from the nearest point* inside the frustum.
+    # Anything deeper than nearest_depth + window is background and discarded.
     _COCO_CFG: dict[int, tuple] = {
-        0: (1.5, 40.0),   # person
-        1: (1.5, 40.0),   # bicycle
-        2: (2.5, 80.0),   # car
-        3: (1.5, 40.0),   # motorcycle
-        5: (3.0, 80.0),   # bus
-        7: (3.0, 80.0),   # truck
+        0: (1.5, 40.0,  3.0),   # person      — max ~0.5m thick; allow 3m window
+        1: (1.5, 40.0,  3.0),   # bicycle     — similar to person
+        2: (2.5, 80.0,  6.0),   # car         — up to 5m long; allow 6m window
+        3: (1.5, 40.0,  3.0),   # motorcycle  — thin object
+        5: (3.0, 80.0, 10.0),   # bus         — can be long
+        7: (3.0, 80.0,  8.0),   # truck       — longer than car
     }
-    _DEFAULT_CFG = (2.0, 60.0)
+    _DEFAULT_CFG = (2.0, 60.0, 6.0)
+
+    # Max allowed box dimensions (dx, dy, dz) per internal class (Ped/Cyc/Car).
+    # Clamp prevents one bad frame from producing a warehouse-sized box.
+    _DIM_MAX: dict[int, tuple] = {
+        0: (1.0, 1.0, 2.2),    # Pedestrian — 1m × 1m × 2.2m
+        1: (2.0, 1.2, 2.0),    # Cyclist    — 2m × 1.2m × 2m
+        2: (6.0, 3.0, 2.5),    # Car        — 6m × 3m × 2.5m
+    }
+
+    # Min allowed box dimensions (dx, dy, dz) per internal class.
+    # Rejects tiny noise clusters (e.g. 4 points spread over 5cm).
+    _DIM_MIN: dict[int, tuple] = {
+        0: (0.15, 0.15, 0.4),  # Pedestrian
+        1: (0.2, 0.2, 0.4),    # Cyclist
+        2: (0.8, 0.6, 0.4),    # Car
+    }
 
     def __init__(self, conf_thr: float = 0.40, min_pts: int = 4,
                  use_dbscan: bool = True):
@@ -226,8 +244,9 @@ class FrustumDetector:
                 if float(conf_score) < self.conf_thr:
                     continue
 
-                eps_m, depth_max = self._COCO_CFG.get(coco_cls, self._DEFAULT_CFG)
-                internal_cls     = COCO_TO_INTERNAL[coco_cls]
+                eps_m, depth_max, depth_win = self._COCO_CFG.get(
+                    coco_cls, self._DEFAULT_CFG)
+                internal_cls = COCO_TO_INTERNAL[coco_cls]
 
                 # Binary mask at full image resolution
                 mask_bin = cv2.resize(
@@ -235,12 +254,28 @@ class FrustumDetector:
                     interpolation=cv2.INTER_LINEAR,
                 ) > 127
 
-                # LiDAR points inside this mask AND within depth limit
+                # LiDAR points inside this mask AND within global depth limit
                 in_mask = mask_bin[v_int, u_int] & (depth_in < depth_max)
                 if in_mask.sum() < self.min_pts:
                     continue
 
-                pts3d = lidar_filtered[lidar_idx[in_mask], :3]   # (K, 3)
+                # ── Depth-window filter (kills background splash) ─────────────
+                # Find the nearest occupied depth (5th-percentile to ignore
+                # stray LiDAR noise) and discard anything farther than
+                # nearest_depth + depth_win.  This is the key fix for
+                # points projecting onto a mask but sitting behind the object.
+                in_mask_depths = depth_in[in_mask]
+                near_depth = float(np.percentile(in_mask_depths, 5))
+                depth_ceil = near_depth + depth_win
+                depth_ok   = in_mask_depths <= depth_ceil
+
+                # Build final index into lidar_filtered
+                in_mask_idx   = np.where(in_mask)[0]          # indices into lidar_idx
+                in_mask_idx   = in_mask_idx[depth_ok]
+                if len(in_mask_idx) < self.min_pts:
+                    continue
+
+                pts3d = lidar_filtered[lidar_idx[in_mask_idx], :3]   # (K, 3)
 
                 # ── PointPainting filter ───────────────────────────────────────
                 paint_filtered  = False
@@ -249,8 +284,11 @@ class FrustumDetector:
 
                 if scored_cloud is not None and scored_cloud.shape[1] >= 8:
                     col_idx        = _SCORE_COL[internal_cls]
-                    paint_scores   = scored_cloud[lidar_idx[in_mask], col_idx]
-                    keep_paint     = paint_scores > 0.15
+                    paint_scores   = scored_cloud[lidar_idx[in_mask_idx], col_idx]
+                    # Tighter threshold (0.25) vs original 0.15 — reduces
+                    # weakly-painted background points that slipped past the
+                    # depth-window filter.
+                    keep_paint     = paint_scores > 0.25
                     pts3d_filtered = pts3d[keep_paint]
 
                     if len(pts3d_filtered) >= self.min_pts:
@@ -278,6 +316,16 @@ class FrustumDetector:
                 maxs   = pts3d.max(0)
                 centre = (mins + maxs) / 2.0
                 dims   = maxs - mins + 1e-3
+
+                # Clamp dimensions to realistic per-class maxima.
+                # This prevents one stray point from inflating the box.
+                d_max = self._DIM_MAX.get(internal_cls, (8.0, 4.0, 3.0))
+                dims  = np.minimum(dims, np.array(d_max, dtype=np.float32))
+
+                # Enforce minimum dimensions to reject tiny false detections / noise
+                d_min = self._DIM_MIN.get(internal_cls, (0.1, 0.1, 0.1))
+                if np.any(dims < np.array(d_min, dtype=np.float32)):
+                    continue
 
                 # PCA heading (skip for pedestrians — clusters too small)
                 heading = 0.0

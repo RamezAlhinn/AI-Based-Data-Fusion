@@ -29,7 +29,7 @@ def init_projector(calib_file_path: str) -> None:
     _projector = KittiLidarToImageProjector(calib_file_path)
 
 
-def paint_points(points_xyz: np.ndarray, seg_image: np.ndarray):
+def paint_points(points_xyz: np.ndarray, seg_image: np.ndarray, yolo_results: list = None):
     """
     Project each LiDAR point onto the segmentation mask and return its class ID.
 
@@ -83,6 +83,49 @@ def paint_points(points_xyz: np.ndarray, seg_image: np.ndarray):
     orig_indices = not_ground_indices[depth_indices[inside]]
     u_in = np.clip(u_all[inside].astype(int), 0, w - 1)
     v_in = np.clip(v_all[inside].astype(int), 0, h - 1)
+    depths_in = cam_front[inside, 2]
+
+    has_instances = False
+    if yolo_results is not None and len(yolo_results) > 0:
+        for r in yolo_results:
+            if r.masks is not None and len(r.masks) > 0:
+                has_instances = True
+                break
+
+    if has_instances:
+        class_ids = np.full(n, -1, dtype=int)
+        # Priority order for overwriting: vehicles first, person/vulnerable road users last
+        PRIORITY = {0: 10, 1: 9, 3: 8}
+
+        for result in yolo_results:
+            if result.masks is None:
+                continue
+            masks   = result.masks.data.cpu().numpy()
+            classes = result.boxes.cls.cpu().numpy().astype(int)
+            confs   = result.boxes.conf.cpu().numpy()
+
+            pairs = sorted(zip(masks, classes, confs), key=lambda x: PRIORITY.get(int(x[1]), 0))
+            for mask, cls_id, conf in pairs:
+                cls_id = int(cls_id)
+                # Resize mask
+                mask_resized = cv2.resize(mask, (w, h), interpolation=cv2.INTER_LINEAR)
+                inside_mask = mask_resized[v_in, u_in] > 0.5
+                if not inside_mask.any():
+                    continue
+
+                # Depth filtering
+                near_depth = np.percentile(depths_in[inside_mask], 5)
+                window = _COCO_DEPTH_WINDOW.get(cls_id, 3.0)
+                depth_mask = (depths_in >= near_depth - 0.2) & (depths_in <= near_depth + window)
+                valid_paint = inside_mask & depth_mask
+
+                if not valid_paint.any():
+                    continue
+
+                class_ids[orig_indices[valid_paint]] = cls_id
+
+        painted = int((class_ids >= 0).sum())
+        return painted, n - painted, class_ids.tolist()
 
     # Step 6: majority-vote class lookup in a 3px neighborhood
     def majority_class(lm, cy, cx, r=3):
@@ -99,7 +142,6 @@ def paint_points(points_xyz: np.ndarray, seg_image: np.ndarray):
     class_ids_in = np.array([majority_class(seg_image, v, u, r=3) for u, v in zip(u_in, v_in)])
 
     # Step 7: depth filtering using a 2D local minimum depth map
-    depths_in = cam_front[inside, 2]
     depth_map = np.full((h, w), 1000.0, dtype=np.float32)
     # Sort depths in descending order so that the minimum depth is written last and overwrites larger depths
     sorted_idx = np.argsort(depths_in)[::-1]
@@ -130,6 +172,16 @@ def paint_points(points_xyz: np.ndarray, seg_image: np.ndarray):
 #   bicycle (1), motorcycle (3)     → col 7  (s_cyc)
 _COCO_TO_SCORE_COL = {0: 5, 2: 6, 5: 6, 7: 6, 1: 7, 3: 7}
 
+# Class-specific depth windows (in meters) to reject background spill
+_COCO_DEPTH_WINDOW = {
+    0: 3.0,   # person (Pedestrian)
+    1: 3.0,   # bicycle (Cyclist)
+    2: 6.0,   # car (Car)
+    3: 3.0,   # motorcycle (Cyclist)
+    5: 10.0,  # bus (Car)
+    7: 8.0,   # truck (Car)
+}
+
 
 def paint_points_scored(
     points_xyz: np.ndarray,
@@ -150,7 +202,7 @@ def paint_points_scored(
                    If provided, instance-level depth filtering is applied to resolve
                    background bleeding.
     depth_window : float (default: 3.0 meters)
-                   The window size around the median depth of an instance to consider points valid.
+                   The window size around the nearest depth of an instance to consider points valid.
 
     Returns
     -------
@@ -242,11 +294,12 @@ def paint_points_scored(
                 if not inside_mask.any():
                     continue
 
-                # Compute median depth of points projecting inside this mask
-                med_depth = np.median(depths_in[inside_mask])
+                # Compute nearest depth of points projecting inside this mask (ignore noise)
+                near_depth = np.percentile(depths_in[inside_mask], 5)
+                window = _COCO_DEPTH_WINDOW.get(cls_id, depth_window)
 
-                # Keep only points within depth window of the median depth
-                depth_mask = (depths_in >= med_depth - depth_window) & (depths_in <= med_depth + depth_window)
+                # Keep only points within depth window of the nearest depth
+                depth_mask = (depths_in >= near_depth - 0.2) & (depths_in <= near_depth + window)
                 valid_paint = inside_mask & depth_mask
 
                 if not valid_paint.any():

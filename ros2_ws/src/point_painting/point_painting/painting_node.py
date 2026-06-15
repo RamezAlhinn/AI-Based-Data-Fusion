@@ -186,7 +186,7 @@ class PaintingNode(Node):
             return
 
         xyz = np.array([(p[0], p[1], p[2]) for p in points], dtype=np.float32)
-        painted, skipped, class_ids = paint_points(xyz, seg_image)
+        painted, skipped, class_ids = paint_points(xyz, seg_image, yolo_results=self._latest_yolo_results)
 
         # Publish visualization cloud (coloured by class for Foxglove)
         self._publish_painted_cloud(xyz, class_ids, out_header)
