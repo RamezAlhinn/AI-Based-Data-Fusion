@@ -202,7 +202,7 @@ class FrustumNode(Node):
         if not raw:
             return
 
-        scored = np.array(raw, dtype=np.float32)   # (N, 8)
+        scored = np.array([list(r) for r in raw], dtype=np.float32)   # (N, 8)
         lidar_filtered = scored                     # FrustumDetector uses cols 0-2
 
         # ── Detect ────────────────────────────────────────────────────────────

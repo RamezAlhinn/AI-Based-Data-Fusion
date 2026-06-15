@@ -143,14 +143,14 @@ class FrustumDetector:
 
     # (dbscan_eps_m, depth_max_m) per COCO class
     _COCO_CFG: dict[int, tuple] = {
-        0: (1.5, 40.0),   # person
-        1: (1.5, 40.0),   # bicycle
-        2: (2.5, 80.0),   # car
-        3: (1.5, 40.0),   # motorcycle
-        5: (3.0, 80.0),   # bus
-        7: (3.0, 80.0),   # truck
+        0: (1.5, 15.0),   # person
+        1: (1.5, 20.0),   # bicycle
+        2: (2.5, 50.0),   # car
+        3: (1.5, 20.0),   # motorcycle
+        5: (3.0, 50.0),   # bus
+        7: (3.0, 50.0),   # truck
     }
-    _DEFAULT_CFG = (2.0, 60.0)
+    _DEFAULT_CFG = (2.0, 30.0)
 
     def __init__(self, conf_thr: float = 0.40, min_pts: int = 4,
                  use_dbscan: bool = True):
