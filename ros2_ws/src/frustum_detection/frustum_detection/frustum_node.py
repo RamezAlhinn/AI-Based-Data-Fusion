@@ -40,6 +40,7 @@ import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Image, PointCloud2
 from std_msgs.msg import String
+from geometry_msgs.msg import Point
 from visualization_msgs.msg import Marker, MarkerArray
 from cv_bridge import CvBridge
 from sensor_msgs_py import point_cloud2 as pc2
@@ -202,7 +203,8 @@ class FrustumNode(Node):
         if not raw:
             return
 
-        scored = np.array(raw, dtype=np.float32)   # (N, 8)
+        raw_arr = np.array(raw)
+        scored = raw_arr.view((np.float32, len(field_names)))   # (N, 8)
         lidar_filtered = scored                     # FrustumDetector uses cols 0-2
 
         # ── Detect ────────────────────────────────────────────────────────────
@@ -243,16 +245,27 @@ class FrustumNode(Node):
         header,
     ) -> None:
         """
-        Publish 3D bounding boxes as visualization_msgs/MarkerArray.
+        Publish 3D bounding boxes + track IDs as visualization_msgs/MarkerArray.
 
-        Each detection gets a LINE_LIST marker (wireframe box) coloured by class.
-        A DELETE_ALL marker is prepended to clear stale markers from the previous frame.
+        Namespaces:
+          'frustum_dets'    — thin wireframe boxes for raw detections (blue-ish)
+          'frustum_tracks'  — thick wireframe boxes for confirmed tracks
+          'frustum_labels'  — TEXT_VIEW_FACING markers: class name + track ID
+
+        A DELETE_ALL marker with the correct header is prepended each frame to
+        clear stale markers from the previous frame.
         """
+        # Ensure markers are published in the LiDAR frame so Foxglove can place
+        # them correctly in 3D space.  The scored-cloud header carries the
+        # LiDAR frame_id (typically 'velodyne').
         marker_array = MarkerArray()
 
-        # Clear previous markers
+        # DELETE_ALL must carry a valid header; ns='' means "all namespaces".
         clear = Marker()
-        clear.action = Marker.DELETEALL
+        clear.header    = header
+        clear.ns        = ''
+        clear.id        = 0
+        clear.action    = Marker.DELETEALL
         marker_array.markers.append(clear)
 
         _EDGES = [
@@ -261,44 +274,92 @@ class FrustumNode(Node):
             (0,4),(1,5),(2,6),(3,7),
         ]
 
-        def _corners(det: Detection3D):
+        def _corners_det(det: Detection3D) -> np.ndarray:
             c, s = np.cos(det.heading), np.sin(det.heading)
             hl, hw, hh = det.dx/2, det.dy/2, det.dz/2
             loc = np.array([
-                [ hl, hw,-hh],[ hl,-hw,-hh],[-hl,-hw,-hh],[-hl, hw,-hh],
-                [ hl, hw, hh],[ hl,-hw, hh],[-hl,-hw, hh],[-hl, hw, hh],
+                [ hl,  hw, -hh], [ hl, -hw, -hh], [-hl, -hw, -hh], [-hl,  hw, -hh],
+                [ hl,  hw,  hh], [ hl, -hw,  hh], [-hl, -hw,  hh], [-hl,  hw,  hh],
             ], dtype=np.float32)
-            R = np.array([[c,-s,0.],[s,c,0.],[0.,0.,1.]], dtype=np.float32)
+            R = np.array([[c, -s, 0.], [s, c, 0.], [0., 0., 1.]], dtype=np.float32)
             return (R @ loc.T).T + np.array([det.x, det.y, det.z])
 
-        for idx, det in enumerate(dets):
-            bgr = CLASS_COLORS_BGR.get(det.cls_id, (200, 200, 200))
-            r, g, b = bgr[2]/255., bgr[1]/255., bgr[0]/255.
+        def _corners_track(t) -> np.ndarray:
+            cx, cy, cz, dx, dy, dz, heading = t.box7
+            c, s = np.cos(heading), np.sin(heading)
+            hl, hw, hh = dx/2, dy/2, dz/2
+            loc = np.array([
+                [ hl,  hw, -hh], [ hl, -hw, -hh], [-hl, -hw, -hh], [-hl,  hw, -hh],
+                [ hl,  hw,  hh], [ hl, -hw,  hh], [-hl, -hw,  hh], [-hl,  hw,  hh],
+            ], dtype=np.float32)
+            R = np.array([[c, -s, 0.], [s, c, 0.], [0., 0., 1.]], dtype=np.float32)
+            return (R @ loc.T).T + np.array([cx, cy, cz])
 
+        def _wire_marker(ns: str, mid: int, corners: np.ndarray,
+                         r: float, g: float, b: float,
+                         thickness: float = 0.05) -> Marker:
             m = Marker()
-            m.header = header
-            m.ns     = 'frustum_dets'
-            m.id     = idx
-            m.type   = Marker.LINE_LIST
-            m.action = Marker.ADD
-            m.scale.x = 0.05
+            m.header  = header
+            m.ns      = ns
+            m.id      = mid
+            m.type    = Marker.LINE_LIST
+            m.action  = Marker.ADD
+            m.scale.x = thickness
             m.color.r = r
             m.color.g = g
             m.color.b = b
-            m.color.a = 0.9
-
-            corners = _corners(det)
+            m.color.a = 1.0
             for i, j in _EDGES:
-                from geometry_msgs.msg import Point
-                p0 = Point(x=float(corners[i,0]),
-                           y=float(corners[i,1]),
-                           z=float(corners[i,2]))
-                p1 = Point(x=float(corners[j,0]),
-                           y=float(corners[j,1]),
-                           z=float(corners[j,2]))
-                m.points.extend([p0, p1])
+                m.points.append(Point(x=float(corners[i, 0]),
+                                      y=float(corners[i, 1]),
+                                      z=float(corners[i, 2])))
+                m.points.append(Point(x=float(corners[j, 0]),
+                                      y=float(corners[j, 1]),
+                                      z=float(corners[j, 2])))
+            return m
 
-            marker_array.markers.append(m)
+        # ── Raw detection boxes (thin, dimmer) ────────────────────────────────
+        for idx, det in enumerate(dets):
+            bgr = CLASS_COLORS_BGR.get(det.cls_id, (200, 200, 200))
+            r, g, b = bgr[2]/255. * 0.5, bgr[1]/255. * 0.5, bgr[0]/255. * 0.5
+            corners = _corners_det(det)
+            marker_array.markers.append(
+                _wire_marker('frustum_dets', idx, corners, r, g, b, thickness=0.04)
+            )
+
+        # ── Confirmed track boxes (thick, bright) + text labels ───────────────
+        for t in tracked:
+            bgr = CLASS_COLORS_BGR.get(t.cls_id, (200, 200, 200))
+            r, g, b = bgr[2]/255., bgr[1]/255., bgr[0]/255.
+            corners = _corners_track(t)
+
+            # Thick wireframe box
+            marker_array.markers.append(
+                _wire_marker('frustum_tracks', t.track_id, corners,
+                             r, g, b, thickness=0.08)
+            )
+
+            # Text label above the box: "Car ID:3"
+            cx, cy, cz = float(t.box7[0]), float(t.box7[1]), float(t.box7[2])
+            dz         = float(t.box7[5])
+            txt = Marker()
+            txt.header   = header
+            txt.ns       = 'frustum_labels'
+            txt.id       = t.track_id
+            txt.type     = Marker.TEXT_VIEW_FACING
+            txt.action   = Marker.ADD
+            txt.pose.position.x = cx
+            txt.pose.position.y = cy
+            txt.pose.position.z = cz + dz / 2.0 + 0.4   # above box top
+            txt.pose.orientation.w = 1.0
+            txt.scale.z  = 0.5        # text height in metres
+            txt.color.r  = r
+            txt.color.g  = g
+            txt.color.b  = b
+            txt.color.a  = 1.0
+            score_str = f' {t.score:.2f}' if t.score > 0 else ''
+            txt.text  = f'{t.cls_name} ID:{t.track_id}{score_str}'
+            marker_array.markers.append(txt)
 
         self._marker_pub.publish(marker_array)
 

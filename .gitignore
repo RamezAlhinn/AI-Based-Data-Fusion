@@ -2,6 +2,9 @@
 ros2_ws/build/
 ros2_ws/install/
 ros2_ws/log/
+build/
+install/
+log/
 
 # Bag files
 *.db3
@@ -12,6 +15,7 @@ bags/*.yaml
 __pycache__/
 *.pyc
 *.egg-info/
+ros2_ws/src/frustum_detection/frustum_detection/frustum_node
 
 # Environment secrets
 .env
@@ -23,3 +27,6 @@ __pycache__/
 
 # Test output images
 isolation_output/
+
+# Scratch and local scripts
+scratch/
