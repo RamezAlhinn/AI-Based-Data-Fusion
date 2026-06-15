@@ -112,6 +112,7 @@ class PaintingNode(Node):
         self._painted_pub = self.create_publisher(PointCloud2, '/painting/painted_cloud', 10)
         self._scored_pub = self.create_publisher(PointCloud2, '/painting/scored_cloud', 10)
         self._raw_aligned_pub = self.create_publisher(PointCloud2, '/painting/raw_cloud_aligned', 10)
+        self._yolo_results_pub = self.create_publisher(String, '/painting/yolo_results', 10)
         self._overlay_pub = self.create_publisher(Image, '/painting/segmentation_overlay', 10)
         self._points_overlay_pub = self.create_publisher(Image, '/painting/points_overlay', 10)
         self.create_subscription(Image, '/blackfly_s/cam0/image_rectified', self._img_cb, 10)
@@ -162,20 +163,16 @@ class PaintingNode(Node):
         cv_image = self._latest_cv_image
         seg_image = self._latest_seg_image
 
-        # Estimate clock domain offset dynamically on first frame pair
+        # Estimate clock domain offset dynamically on first frame pair (keep for diagnostic logs)
         if self._clock_offset is None:
             t_img = img_msg.header.stamp.sec + img_msg.header.stamp.nanosec * 1e-9
             t_lidar = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
             self._clock_offset = t_img - t_lidar
             self.get_logger().info(f'Estimated Camera-to-LiDAR clock offset: {self._clock_offset:.6f} seconds')
 
-        # Translate monotonic LiDAR stamp to Unix epoch clock domain
-        t_lidar = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
-        t_out = t_lidar + self._clock_offset
-
-        from rclpy.time import Time
+        # Use the EXACT camera image timestamp for the output headers to achieve perfect synchronization!
         out_header = Header()
-        out_header.stamp = Time(seconds=t_out).to_msg()
+        out_header.stamp = img_msg.header.stamp
         out_header.frame_id = msg.header.frame_id
 
         # Publish raw points synchronized in Unix time domain
@@ -197,6 +194,33 @@ class PaintingNode(Node):
         if score_maps or yolo_results:
             scored = paint_points_scored(xyz, score_maps, yolo_results=yolo_results)
             self._publish_scored_cloud(scored, out_header)
+
+        # Extract and serialize YOLO results (contours, classes, confidences) for FrustumNode
+        yolo_data = []
+        if self._latest_yolo_results is not None:
+            for result in self._latest_yolo_results:
+                if result.masks is None:
+                    continue
+                classes = result.boxes.cls.cpu().numpy().astype(int)
+                confs   = result.boxes.conf.cpu().numpy()
+                for cls_id, conf, poly in zip(classes, confs, result.masks.xy):
+                    yolo_data.append({
+                        'class': int(cls_id),
+                        'conf': float(conf),
+                        'polygon': poly.tolist()
+                    })
+
+        import json
+        yolo_msg_payload = {
+            'stamp': {
+                'sec': out_header.stamp.sec,
+                'nanosec': out_header.stamp.nanosec
+            },
+            'instances': yolo_data
+        }
+        yolo_msg = String()
+        yolo_msg.data = json.dumps(yolo_msg_payload)
+        self._yolo_results_pub.publish(yolo_msg)
 
         self._frame_count += 1
         # Throttle verification overlays to every 5th LiDAR frame

@@ -64,14 +64,39 @@ from frustum_detection import (
 from perception_framework.lidar_to_image_projection import KittiLidarToImageProjector
 
 
+# ── Mock YOLO wrappers to feed deserialized JSON results to FrustumDetector ────
+class MockTensor:
+    def __init__(self, data):
+        self._data = data
+    def cpu(self):
+        return self
+    def numpy(self):
+        return self._data
+
+class MockBoxes:
+    def __init__(self, cls_list, conf_list):
+        self.cls = MockTensor(np.array(cls_list))
+        self.conf = MockTensor(np.array(conf_list))
+
+class MockMasks:
+    def __init__(self, masks_list):
+        self.data = MockTensor(np.array(masks_list))
+
+class MockYoloResult:
+    def __init__(self, masks_list, cls_list, conf_list):
+        self.masks = MockMasks(masks_list) if masks_list else None
+        self.boxes = MockBoxes(cls_list, conf_list)
+
+
 class FrustumNode(Node):
     """
     ROS 2 node — Frustum-based 3D detection using PointPainting-scored clouds.
 
-    Subscribes to the /painting/scored_cloud topic published by PaintingNode and
-    the rectified camera image. For each incoming LiDAR scan it:
-      1. Re-runs YOLO on the latest camera frame (cached per unique stamp)
-      2. Passes scored cloud + YOLO results to FrustumDetector
+    Subscribes to the /painting/scored_cloud and /painting/yolo_results topics
+    published by PaintingNode, and the rectified camera image. For each incoming
+    LiDAR scan it:
+      1. Matches the camera image and the YOLO results using the exact timestamp
+      2. Reconstructs YOLO detections and passes them to FrustumDetector
       3. Publishes 3D bounding boxes as MarkerArray + BEV image
     """
 
@@ -106,16 +131,9 @@ class FrustumNode(Node):
                 'Pass: --ros-args -p calib_file:=/path/to/calib.txt'
             )
 
-        # ── YOLO model ────────────────────────────────────────────────────────
+        # ── YOLO model (Skipped in Optimized pipeline since YOLO runs in PaintingNode only) ──
         self._yolo_model = None
-        try:
-            from point_painting.segmentation.yolo_segmentation import load_model
-            self._yolo_model = load_model(checkpoint if checkpoint else None)
-            self.get_logger().info(
-                f'YOLO model loaded: {checkpoint or "yolo11n-seg.pt (default)"}'
-            )
-        except Exception as e:
-            self.get_logger().error(f'Failed to load YOLO model: {e}')
+        self.get_logger().info('Optimized pipeline: YOLO model loading skipped in FrustumNode.')
 
         # ── FrustumDetector + Tracker ─────────────────────────────────────────
         self._detector = FrustumDetector(
@@ -134,9 +152,8 @@ class FrustumNode(Node):
         # ── State ─────────────────────────────────────────────────────────────
         self._bridge           = CvBridge()
         self._latest_img_msg   = None
-        self._cached_stamp     = None
-        self._cached_yolo      = None       # YOLO results for cached stamp
-        self._cached_cv_bgr    = None       # OpenCV BGR image for visualisation
+        self._yolo_buffer      = {}         # stamp -> list of instance dicts
+        self._img_buffer       = {}         # stamp -> Image msg
         self._frame_count      = 0
 
         # ── Publishers ────────────────────────────────────────────────────────
@@ -152,50 +169,123 @@ class FrustumNode(Node):
             Image, '/blackfly_s/cam0/image_rectified', self._img_cb, 10)
         self.create_subscription(
             PointCloud2, '/painting/scored_cloud', self._cloud_cb, 10)
+        self.create_subscription(
+            String, '/painting/yolo_results', self._yolo_results_cb, 10)
 
         self.get_logger().info('FrustumNode started — waiting for scored cloud...')
 
     # ── Callbacks ─────────────────────────────────────────────────────────────
 
     def _img_cb(self, msg: Image) -> None:
-        """Cache the latest camera frame."""
+        """Cache the latest camera frame and add it to the buffer."""
         self._latest_img_msg = msg
+        stamp = (msg.header.stamp.sec, msg.header.stamp.nanosec)
+        self._img_buffer[stamp] = msg
+        
+        # Prune buffer to keep it small (e.g. last 50 images)
+        if len(self._img_buffer) > 50:
+            oldest_stamp = min(self._img_buffer.keys(), key=lambda s: s[0] + s[1]*1e-9)
+            self._img_buffer.pop(oldest_stamp, None)
+
+    def _yolo_results_cb(self, msg: String) -> None:
+        """Receive serialized YOLO results from PaintingNode."""
+        import json
+        try:
+            payload = json.loads(msg.data)
+            sec = payload['stamp']['sec']
+            nanosec = payload['stamp']['nanosec']
+            stamp = (sec, nanosec)
+            self._yolo_buffer[stamp] = payload['instances']
+            
+            # Prune buffer to keep it small (e.g. last 50 entries)
+            if len(self._yolo_buffer) > 50:
+                oldest_stamp = min(self._yolo_buffer.keys(), key=lambda s: s[0] + s[1]*1e-9)
+                self._yolo_buffer.pop(oldest_stamp, None)
+        except Exception as e:
+            self.get_logger().error(f'Failed to parse YOLO JSON results: {e}')
 
     def _cloud_cb(self, msg: PointCloud2) -> None:
         """
-        Main callback: receive scored cloud, run FrustumDetector, publish results.
+        Main callback: receive scored cloud, retrieve matched YOLO results and image,
+        run FrustumDetector, and publish results.
         """
-        if self._projector is None or self._yolo_model is None:
-            return
-        if self._latest_img_msg is None:
+        if self._projector is None:
             return
 
-        img_msg = self._latest_img_msg
-        img_stamp = (img_msg.header.stamp.sec, img_msg.header.stamp.nanosec)
+        cloud_stamp = (msg.header.stamp.sec, msg.header.stamp.nanosec)
 
-        # ── Run YOLO only when image is new ───────────────────────────────────
-        if self._cached_stamp != img_stamp:
-            cv_image = self._bridge.imgmsg_to_cv2(
-                img_msg, desired_encoding='passthrough')
-            # Convert to BGR for visualisation
-            if cv_image.ndim == 2:
-                cv_bgr = cv2.cvtColor(cv_image, cv2.COLOR_GRAY2BGR)
+        # ── Retrieve matched image from buffer ────────────────────────────────
+        if cloud_stamp in self._img_buffer:
+            img_msg = self._img_buffer[cloud_stamp]
+        else:
+            # Fallback to closest image in buffer
+            t_cloud = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+            best_stamp = None
+            best_diff = float('inf')
+            for stamp, img in self._img_buffer.items():
+                t_img = stamp[0] + stamp[1] * 1e-9
+                diff = abs(t_cloud - t_img)
+                if diff < best_diff:
+                    best_diff = diff
+                    best_stamp = stamp
+            if best_stamp is not None and best_diff < 0.2:
+                img_msg = self._img_buffer[best_stamp]
             else:
-                cv_bgr = cv_image[..., ::-1].copy()   # RGB → BGR
-            img_rgb = cv_image[..., ::-1] if cv_image.ndim == 3 else \
-                      cv2.cvtColor(cv_image, cv2.COLOR_GRAY2RGB)
+                if self._latest_img_msg is None:
+                    return
+                img_msg = self._latest_img_msg
 
-            h, w = img_rgb.shape[:2]
-            yolo_results = self._yolo_model(
-                img_rgb, verbose=False, conf=0.40, imgsz=(h, w))
+        # ── Retrieve matched YOLO results from buffer ─────────────────────────
+        instances = []
+        if cloud_stamp in self._yolo_buffer:
+            instances = self._yolo_buffer[cloud_stamp]
+        else:
+            # Fallback to closest YOLO results in buffer
+            t_cloud = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+            best_stamp = None
+            best_diff = float('inf')
+            for stamp, insts in self._yolo_buffer.items():
+                t_yolo = stamp[0] + stamp[1] * 1e-9
+                diff = abs(t_cloud - t_yolo)
+                if diff < best_diff:
+                    best_diff = diff
+                    best_stamp = stamp
+            if best_stamp is not None and best_diff < 0.2:
+                instances = self._yolo_buffer[best_stamp]
 
-            self._cached_stamp  = img_stamp
-            self._cached_yolo   = yolo_results
-            self._cached_cv_bgr = cv_bgr
+        # Convert img_msg to OpenCV
+        cv_image = self._bridge.imgmsg_to_cv2(
+            img_msg, desired_encoding='passthrough')
+        # Convert to BGR for visualisation
+        if cv_image.ndim == 2:
+            cv_bgr = cv2.cvtColor(cv_image, cv2.COLOR_GRAY2BGR)
+        else:
+            cv_bgr = cv_image[..., ::-1].copy()   # RGB → BGR
+        h, w = cv_image.shape[:2]
+        img_shape = (h, w)
 
-        yolo_results = self._cached_yolo
-        cv_bgr       = self._cached_cv_bgr
-        img_shape    = cv_bgr.shape[:2]   # (H, W)
+        # ── Reconstruct YOLO results using Mock wrapper ───────────────────────
+        masks_list = []
+        cls_list = []
+        conf_list = []
+        for inst in instances:
+            cls_id = inst['class']
+            conf = inst['conf']
+            poly = inst['polygon']
+            
+            mask = np.zeros((h, w), dtype=np.float32)
+            if len(poly) > 0:
+                poly_np = np.array(poly, dtype=np.int32)
+                cv2.fillPoly(mask, [poly_np], 1.0)
+            
+            masks_list.append(mask)
+            cls_list.append(cls_id)
+            conf_list.append(conf)
+
+        if masks_list:
+            yolo_results = [MockYoloResult(masks_list, cls_list, conf_list)]
+        else:
+            yolo_results = []
 
         # ── Read scored cloud ─────────────────────────────────────────────────
         field_names = ('x', 'y', 'z', 'intensity', 'ring', 's_ped', 's_car', 's_cyc')

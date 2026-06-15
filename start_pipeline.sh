@@ -12,7 +12,7 @@ WS=/workspace/ros2_ws
 LOG=/workspace/log
 BAG=/workspace/studentProject1
 CALIB=/workspace/calib.txt
-CKPT=/workspace/models/yolo11m-seg.pt
+CKPT=/workspace/models/yolo11n-seg.pt
 
 source "$WS/install/setup.bash"
 
@@ -37,10 +37,9 @@ nohup ros2 run point_painting painting_node --ros-args \
 PAINT_PID=$!
 echo "  painting_node PID=$PAINT_PID"
 
-echo "[pipeline] Starting frustum_node (YOLO load ~4s)..."
+echo "[pipeline] Starting frustum_node..."
 nohup ros2 run frustum_detection frustum_node --ros-args \
   -p calib_file:="$CALIB" \
-  -p checkpoint_path:="$CKPT" \
   > "$LOG/frustum_node_live.log" 2>&1 &
 FRUS_PID=$!
 echo "  frustum_node PID=$FRUS_PID"
