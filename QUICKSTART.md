@@ -22,6 +22,46 @@ Camera ──────┴──────────► /blackfly_s/cam0/.
 
 ---
 
+## Step 0 — Host-Side DDS Performance Tuning (Once per Host Machine)
+
+> [!TIP]
+> **Automatic Tuning**: These network tuning parameters have been automated via the `"initializeCommand"` configuration in [.devcontainer/devcontainer.json](file:///workspace/.devcontainer/devcontainer.json). Every time you open or rebuild the Dev Container in VS Code, the commands are automatically run on your host system to keep the virtual machine settings up-to-date. The manual instructions below are kept for reference or verification.
+
+To prevent ROS 2 from dropping large data packets (like point clouds and camera frames), you must tune the network buffer size limits on your host system:
+
+### Linux (Ubuntu/Debian)
+Run the following in your host terminal:
+```bash
+# Apply immediately
+sudo sysctl -w net.core.rmem_max=2147483647
+sudo sysctl -w net.ipv4.ipfrag_time=3
+sudo sysctl -w net.ipv4.ipfrag_high_thresh=134217728
+
+# Make persistent across reboots
+sudo tee /etc/sysctl.d/10-cyclone-max.conf <<EOF
+net.core.rmem_max=2147483647
+net.ipv4.ipfrag_time=3
+net.ipv4.ipfrag_high_thresh=134217728
+EOF
+```
+
+### macOS (Docker Desktop)
+Run the following command in your Mac terminal (this uses a temporary privileged container to configure the virtual machine running Docker):
+```bash
+docker run --rm --privileged --pid=host alpine nsenter -t 1 -m -u -i -n sysctl -w net.core.rmem_max=2147483647 net.ipv4.ipfrag_time=3 net.ipv4.ipfrag_high_thresh=134217728
+```
+
+### Windows (WSL2 / Docker Desktop)
+Run the following in PowerShell on the host:
+```powershell
+wsl -d docker-desktop -u root sysctl -w net.core.rmem_max=2147483647
+wsl -d docker-desktop -u root sysctl -w net.ipv4.ipfrag_time=3
+wsl -d docker-desktop -u root sysctl -w net.ipv4.ipfrag_high_thresh=134217728
+```
+*(Alternatively, you can run the same `docker run --rm --privileged --pid=host alpine ...` command listed for macOS inside Command Prompt or PowerShell).*
+
+---
+
 ## Step 1 — Build the Workspace (Once per container start)
 
 Inside the container terminal:

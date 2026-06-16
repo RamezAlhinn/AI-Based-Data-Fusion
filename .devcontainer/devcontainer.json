@@ -7,8 +7,30 @@
   "workspaceFolder": "/workspace",
   "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind",
   "containerEnv": {
-    "ROS_DOMAIN_ID": "42"
+    "ROS_DOMAIN_ID": "42",
+    "RMW_IMPLEMENTATION": "rmw_cyclonedds_cpp",
+    "CYCLONEDDS_URI": "file:///workspace/.devcontainer/cyclonedds.xml"
   },
+  "initializeCommand": [
+    "docker",
+    "run",
+    "--rm",
+    "--privileged",
+    "--pid=host",
+    "alpine",
+    "nsenter",
+    "-t",
+    "1",
+    "-m",
+    "-u",
+    "-i",
+    "-n",
+    "sysctl",
+    "-w",
+    "net.core.rmem_max=2147483647",
+    "net.ipv4.ipfrag_time=3",
+    "net.ipv4.ipfrag_high_thresh=134217728"
+  ],
   "customizations": {
     "vscode": {
       "extensions": [
@@ -41,6 +63,6 @@
       "onAutoForward": "silent"
     }
   },
-  "postStartCommand": "[ -f /workspace/yolo11m-seg.pt ] || cp /yolo11m-seg.pt /workspace/yolo11m-seg.pt 2>/dev/null || true; cd /workspace/ros2_ws && colcon build --symlink-install 2>/dev/null || true",
+  "postStartCommand": "sudo ip link set lo multicast on || true; [ -f /workspace/yolo11m-seg.pt ] || cp /yolo11m-seg.pt /workspace/yolo11m-seg.pt 2>/dev/null || true; cd /workspace/ros2_ws && colcon build --symlink-install 2>/dev/null || true",
   "remoteUser": "root"
 }
