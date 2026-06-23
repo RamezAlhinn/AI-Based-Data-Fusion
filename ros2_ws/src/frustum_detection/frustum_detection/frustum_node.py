@@ -496,14 +496,14 @@ class FrustumNode(Node):
             obj_msg.class_id = int(t.cls_id)
             
             # Position
-            obj_msg.x = float(t.box7[0])
-            obj_msg.y = float(t.box7[1])
-            obj_msg.z = float(t.box7[2])
+            obj_msg.position.x = float(t.box7[0])
+            obj_msg.position.y = float(t.box7[1])
+            obj_msg.position.z = float(t.box7[2])
             
             # Dimensions
-            obj_msg.dx = float(t.box7[3])
-            obj_msg.dy = float(t.box7[4])
-            obj_msg.dz = float(t.box7[5])
+            obj_msg.size.x = float(t.box7[3])
+            obj_msg.size.y = float(t.box7[4])
+            obj_msg.size.z = float(t.box7[5])
             
             # Yaw angle
             obj_msg.heading = float(t.box7[6])
@@ -513,13 +513,11 @@ class FrustumNode(Node):
             
             # Additional tracking parameters
             obj_msg.is_predicted = bool(t.is_predicted)
-            obj_msg.hits = int(t.hits)
-            obj_msg.age = int(t.age)
             
             # Velocity: vx, vy, vz
-            obj_msg.vx = float(t.velocity[0])
-            obj_msg.vy = float(t.velocity[1])
-            obj_msg.vz = float(t.velocity[2])
+            obj_msg.velocity.x = float(t.velocity[0])
+            obj_msg.velocity.y = float(t.velocity[1])
+            obj_msg.velocity.z = float(t.velocity[2])
             
             array_msg.objects.append(obj_msg)
             
