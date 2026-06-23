@@ -31,6 +31,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-humble-tf2-ros \
     ros-humble-message-filters \
     ros-humble-foxglove-bridge \
+    ros-humble-rmw-cyclonedds-cpp \
     python3-pip \
     python3-colcon-common-extensions \
     python3-rosdep \

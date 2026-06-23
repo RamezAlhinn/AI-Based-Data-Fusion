@@ -193,7 +193,8 @@ AI-Based-Data-Fusion/
 ├── docs/
 │   ├── Project_Summary.md                 ← this document
 │   ├── PointPainting_Learning_Guide.md
-│   └── Architecture_Proposal.md
+│   ├── Architecture_Proposal.md
+│   └── Tracking_and_Detection_Parameters.md ← tracking & detection parameters guide
 └── ros2_ws/src/
     ├── perception_framework/              ← arpitashil676
     │   └── lidar_to_image_projection.py

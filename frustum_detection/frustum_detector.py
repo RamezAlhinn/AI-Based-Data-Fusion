@@ -152,6 +152,7 @@ class FrustumDetector:
         5: (3.0, 80.0, 10.0),   # bus         — can be long
         7: (3.0, 80.0,  8.0),   # truck       — longer than car
     }
+    # TODO: set config params too large eps, depth_max, depth_window.   
     _DEFAULT_CFG = (2.0, 60.0, 6.0)
 
     # Max allowed box dimensions (dx, dy, dz) per internal class (Ped/Cyc/Car).
