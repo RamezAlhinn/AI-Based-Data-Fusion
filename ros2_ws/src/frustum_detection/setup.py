@@ -10,6 +10,7 @@ setup(
         ('share/ament_index/resource_index/packages',
          [f'resource/{package_name}']),
         (f'share/{package_name}', ['package.xml']),
+        (f'share/{package_name}/launch', ['launch/pipeline.launch.py']),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -21,6 +22,8 @@ setup(
     entry_points={
         'console_scripts': [
             'frustum_node = frustum_detection.frustum_node:main',
+            'metrics_logger_node = frustum_detection.metrics_logger_node:main',
+            'bev_recorder_node = frustum_detection.bev_recorder_node:main',
         ],
     },
 )

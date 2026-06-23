@@ -1,216 +1,192 @@
-# Quickstart — Running the Fused Perception Pipeline
+# Quickstart — AI-Based Data Fusion Pipeline
 
-This guide explains how to build, run, and visualize the **PointPainting + Frustum 3D Object Detection & Tracking** pipeline.
+**PointPainting + Frustum 3D Detection + AB3DMOT Tracking**
 
-All ROS 2 commands must run **inside the Dev Container** (`><` → Reopen in Container). Open multiple terminal tabs in VS Code (`Ctrl+Shift+``) to run the components.
-
----
-
-## Pipeline Overview
-
-```
-LiDAR Scan ──┐
-             ▼
-        [PaintingNode] ──► /painting/scored_cloud ──┐
-             ▲                                      ▼
-Camera ──────┴──────────► /blackfly_s/cam0/... ──► [FrustumNode] ──► /frustum/markers (3D Boxes)
-                                                                 ──► /frustum/bev     (BEV panel)
-```
-
-1. **`PaintingNode`**: Receives LiDAR and camera feeds, runs YOLO instance segmentation, projects the point cloud onto the image, and publishes a point cloud enriched with semantic class scores.
-2. **`FrustumNode`**: Subscribes to the camera feed and the scored point cloud. It uses the 2D YOLO bounding boxes to extract 3D point cloud frustums, clusters them using DBSCAN to estimate 3D bounding boxes, runs NMS, and tracks objects frame-to-frame using AB3DMOT.
+All commands run **inside the Dev Container**. Open it in VS Code: click `><` (bottom-left) → **Reopen in Container**.
 
 ---
 
-## Step 0 — Host-Side DDS Performance Tuning (Once per Host Machine)
+## How the Pipeline Works
 
-> [!TIP]
-> **Automatic Tuning**: These network tuning parameters have been automated via the `"initializeCommand"` configuration in [.devcontainer/devcontainer.json](file:///workspace/.devcontainer/devcontainer.json). Every time you open or rebuild the Dev Container in VS Code, the commands are automatically run on your host system to keep the virtual machine settings up-to-date. The manual instructions below are kept for reference or verification.
-
-To prevent ROS 2 from dropping large data packets (like point clouds and camera frames), you must tune the network buffer size limits on your host system:
-
-### Linux (Ubuntu/Debian)
-Run the following in your host terminal:
-```bash
-# Apply immediately
-sudo sysctl -w net.core.rmem_max=2147483647
-sudo sysctl -w net.ipv4.ipfrag_time=3
-sudo sysctl -w net.ipv4.ipfrag_high_thresh=134217728
-
-# Make persistent across reboots
-sudo tee /etc/sysctl.d/10-cyclone-max.conf <<EOF
-net.core.rmem_max=2147483647
-net.ipv4.ipfrag_time=3
-net.ipv4.ipfrag_high_thresh=134217728
-EOF
+```
+Camera ──────────────────────────────────────────────────────┐
+                                                             ▼
+LiDAR ──► [PaintingNode] ──► scored_cloud ──► [FrustumNode] ──► 3D Boxes + Tracks
+               │                                    │
+               ▼                                    ▼
+          YOLO Segmentation               AB3DMOT Kalman Tracker
 ```
 
-### macOS (Docker Desktop)
-Run the following command in your Mac terminal (this uses a temporary privileged container to configure the virtual machine running Docker):
-```bash
-docker run --rm --privileged --pid=host alpine nsenter -t 1 -m -u -i -n sysctl -w net.core.rmem_max=2147483647 net.ipv4.ipfrag_time=3 net.ipv4.ipfrag_high_thresh=134217728
-```
-
-### Windows (WSL2 / Docker Desktop)
-Run the following in PowerShell on the host:
-```powershell
-wsl -d docker-desktop -u root sysctl -w net.core.rmem_max=2147483647
-wsl -d docker-desktop -u root sysctl -w net.ipv4.ipfrag_time=3
-wsl -d docker-desktop -u root sysctl -w net.ipv4.ipfrag_high_thresh=134217728
-```
-*(Alternatively, you can run the same `docker run --rm --privileged --pid=host alpine ...` command listed for macOS inside Command Prompt or PowerShell).*
+| Node | What it does |
+|---|---|
+| `painting_node` | Runs YOLO on camera, projects LiDAR onto image, labels each point with a class score |
+| `frustum_node` | Uses YOLO boxes to crop frustums of LiDAR points, clusters with DBSCAN, tracks with Kalman filter |
+| `metrics_logger_node` | Collects tracking data live and saves validation plots on shutdown |
 
 ---
 
-## Step 1 — Build the Workspace (Once per container start)
+## Step 1 — Build the Workspace
 
-Inside the container terminal:
+Run this **once** after cloning, or after adding new files / changing `setup.py`:
+
 ```bash
-cd /workspace/ros2_ws
-colcon build --symlink-install
-source install/setup.bash
+cd /workspace/ros2_ws && colcon build --symlink-install
+```
+
+> After this you do **not** need to rebuild just because you edited a Python file — `--symlink-install` picks up changes automatically.
+
+### Refreshing the workspace
+
+If you pulled new changes from Git or something isn't working, rebuild and re-source:
+
+```bash
+cd /workspace/ros2_ws && colcon build --symlink-install && source install/setup.bash
+```
+
+Then rerun the pipeline:
+
+```bash
+ros2 launch frustum_detection pipeline.launch.py
 ```
 
 ---
 
-## Option A — Running via Helper Scripts (Recommended)
+## Step 2 — Run the Pipeline
 
-You can launch or stop the entire pipeline (including bag playback, Foxglove bridge, painting, and frustum nodes) automatically in the background using the provided helper scripts.
+Single command to start everything:
 
-### 1. Start the Pipeline
 ```bash
-bash /workspace/start_pipeline.sh
-```
-This runs all the nodes in the background, redirects output to `/workspace/log/*.log`, and waits ~12 seconds for the nodes to initialize.
-
-### 2. Stop the Pipeline
-To stop all background processes started by the pipeline:
-```bash
-bash /workspace/stop_pipeline.sh
+source /workspace/ros2_ws/install/setup.bash && ros2 launch frustum_detection pipeline.launch.py
 ```
 
-### 3. Check Logs
-To monitor the nodes in real time, you can tail the log files:
-```bash
-# Painting node logs
-tail -f /workspace/log/painting_node_live.log
+This starts `painting_node`, `frustum_node`, and `metrics_logger_node`, then plays the bag automatically after 3 seconds.
 
-# Frustum detection node logs
-tail -f /workspace/log/frustum_node_live.log
+### Optional arguments
+
+```bash
+ros2 launch frustum_detection pipeline.launch.py \
+    bag_rate:=0.5 \
+    frame_skip:=3 \
+    calib_file:=/workspace/calib.txt \
+    output_dir:=/workspace/metrics
 ```
+
+| Argument | Default | Description |
+|---|---|---|
+| `bag_rate` | `0.1` | Playback speed — `0.1` = 10× slower, `1.0` = real-time |
+| `frame_skip` | `3` | Run YOLO every Nth frame — higher = faster, fewer detections |
+| `calib_file` | `/workspace/calib.txt` | KITTI calibration file |
+| `output_dir` | `/workspace/metrics` | Where validation plots are saved |
+
+### Stop and save plots
+
+Press **Ctrl+C** — validation plots are automatically saved to `/workspace/metrics/<timestamp>/`.
 
 ---
 
-## Option B — Running Components Individually (Manual)
+## Step 3 — Visualize in RViz2
 
-If you prefer to run each component in its own terminal to inspect standard output in real-time, open multiple terminal tabs in VS Code (`Ctrl+Shift+``) and run the following:
+### Windows users — start XLaunch first
 
-### Step 2 — Run the PointPainting Node (Terminal 1)
+RViz2 is a GUI application that needs a display server to render on Windows. Before running RViz2:
 
-This node performs camera-LiDAR projection and YOLO segmentation to score the point cloud:
+1. Download and install **VcXsrv** (XLaunch) from [sourceforge.net/projects/vcxsrv](https://sourceforge.net/projects/vcxsrv/)
+2. Open **XLaunch** on Windows
+3. Select **Multiple windows** → Next
+4. Select **Start no client** → Next
+5. Check **Disable access control** → Finish
 
+Then inside the devcontainer terminal:
+
+```bash
+source /workspace/ros2_ws/install/setup.bash && rviz2
+```
+
+RViz2 will open as a window on your Windows desktop.
+
+### Mac / Linux users
+
+```bash
+source /workspace/ros2_ws/install/setup.bash && rviz2
+```
+
+### RViz2 setup
+
+1. Set **Fixed Frame** → `velodyne`
+2. Add the following displays (**Add → By topic**):
+
+| Topic | Display type | What you see |
+|---|---|---|
+| `/painting/painted_cloud` | PointCloud2 | Semantically coloured point cloud |
+| `/frustum/markers` | MarkerArray | 3D bounding boxes (green = high conf, red = low conf) |
+| `/frustum/trajectories` | MarkerArray | Path each tracked object has taken |
+| `/frustum/velocity_arrows` | MarkerArray | Cyan arrows showing movement direction and speed |
+| `/frustum/bev` | Image | Bird's eye view panel with confidence legend |
+| `/painting/segmentation_overlay` | Image | YOLO mask overlaid on camera image |
+
+### Confidence colour meaning (bounding boxes)
+
+| Colour | Meaning | Threshold |
+|---|---|---|
+| Green | High confidence | ≥ 0.60 |
+| Red | Low confidence | < 0.60 |
+
+---
+
+## Step 4 — View Validation Plots
+
+After stopping the pipeline (Ctrl+C), the plots are saved inside the container at `/workspace/metrics/`. Open them from your host machine by navigating to the folder where you cloned the repo — the `/workspace` folder is mounted directly to it.
+
+| File | What it shows |
+|---|---|
+| `confidence_over_time.png` | Confidence score per track across all frames |
+| `track_lifetime.png` | Bar chart — how many frames each track stayed alive |
+| `bev_trajectories.png` | Top-down (BEV) path of every track |
+| `validation_summary.png` | Key validation metrics in one table |
+
+---
+
+## Alternative — Run Nodes Individually
+
+If you want separate terminals to read each node's output:
+
+**Terminal 1 — PaintingNode**
 ```bash
 source /workspace/ros2_ws/install/setup.bash
-
-ros2 run point_painting painting_node --ros-args \
-  -p calib_file:=/workspace/calib.txt \
-  -p checkpoint_path:=/workspace/models/yolo11m-seg.pt
+ros2 run point_painting painting_node --ros-args -p calib_file:=/workspace/calib.txt
 ```
 
-*Note: If `/workspace/models/yolo11m-seg.pt` is not present, it will automatically fall back to downloading the lightweight default model.*
-
----
-
-### Step 3 — Run the Frustum Detection Node (Terminal 2)
-
-This node clusters the scored cloud, computes 3D bounding boxes, and tracks them:
-
+**Terminal 2 — FrustumNode**
 ```bash
 source /workspace/ros2_ws/install/setup.bash
-
-ros2 run frustum_detection frustum_node --ros-args \
-  -p calib_file:=/workspace/calib.txt
+ros2 run frustum_detection frustum_node --ros-args -p calib_file:=/workspace/calib.txt
 ```
 
----
-
-### Step 4 — Play the ROS Bag (Terminal 3)
-
+**Terminal 3 — Bag playback**
 ```bash
-ros2 bag play /workspace/studentProject1/ --loop
+ros2 bag play /workspace/studentProject1 --clock --loop --rate 0.1
 ```
 
 ---
 
-## Step 5 — Visualize the Output
+## Offline Isolation Test (No ROS needed)
 
-You can visualize the pipeline results using either **Foxglove Studio** (recommended for Web-based visualization) or **RViz2** (ROS native).
-
-### Option A — Foxglove Studio
-
-1. **Start Foxglove Bridge (Terminal 4):**
-   ```bash
-   ros2 launch foxglove_bridge foxglove_bridge_launch.xml port:=9090
-   ```
-2. **Open Foxglove:** Open [Foxglove Studio](https://app.foxglove.dev) in your browser or desktop app on your **Mac**.
-3. **Connect:** Click **Open connection** → **Foxglove WebSocket** → `ws://localhost:9090`.
-4. **Add Panels:**
-   - **3D Panel**: Subscribe to `/painting/painted_cloud` (set **Color mode** to `RGB`) to see the point cloud painted by semantic classes.
-   - **Image Panel**: Subscribe to `/frustum/bev` to view the camera overlay + Bird's Eye View detection panel.
-   - **Image Panel**: Subscribe to `/painting/segmentation_overlay` to verify YOLO instance segmentation masks.
-   - **Image Panel**: Subscribe to `/painting/points_overlay` to view raw points projected onto the camera.
-
----
-
-### Option B — RViz2 (ROS Native Visualization)
-
-> [!NOTE]  
-> Since the Dev Container runs virtualized on macOS, launching GUI applications like RViz2 requires an X11 server (such as [XQuartz](https://www.xquartz.org/)) installed on your Mac, with display forwarding enabled.
-
-1. **Launch RViz2:**
-   ```bash
-   source /workspace/ros2_ws/install/setup.bash
-   rviz2
-   ```
-2. **Configure Global Options:**
-   - Set **Fixed Frame** to `velodyne`.
-3. **Visualize the Semantically Painted Cloud:**
-   - Click **Add** (bottom left) → **By topic** → select `/painting/painted_cloud` -> `PointCloud2`.
-   - In the display settings for this PointCloud2, change **Color Transformer** to `RGB8`. This displays points in class colors:
-     - 🔴 **Red** = Pedestrians
-     - 🟢 **Green** = Cars / Trucks
-     - 🔵 **Blue** = Bicycles
-     - 🟠 **Orange** = Motorcycles
-4. **Visualize 3D Bounding Boxes & Tracks:**
-   - Click **Add** → **By topic** → select `/frustum/markers` -> `MarkerArray`.
-   - This displays wireframe 3D bounding boxes around tracked objects, color-coded by class.
-5. **Visualize 2D Overlays & BEV Panels:**
-   - Click **Add** → **By topic** → select `/frustum/bev` -> `Image`.
-   - Click **Add** → **By topic** → select `/painting/segmentation_overlay` -> `Image`.
-
----
-
-## Step 6 — Run the Offline Isolation Test (No ROS 2 needed)
-
-To quickly verify the entire pipeline end-to-end on a single frame without running active ROS nodes or playing a bag, run the isolation test script. It extracts a frame from the bag, runs the projection, YOLO segmentation, point painting, frustum clustering, and tracking offline:
+To verify the pipeline on a single frame without running any nodes:
 
 ```bash
 python3 /workspace/test_pipeline_isolation.py --seed 7
 ```
-*(You can change `--seed <number>` to test different frames in the bag).*
 
-### What is the `isolation_output/` directory?
+Output images are saved to `/workspace/isolation_output/`:
 
-The isolation test script outputs verification images to the `isolation_output/` directory at the root of the workspace. This directory is included in `.gitignore` so your local runs will never clutter the Git repository.
+| File | What it shows |
+|---|---|
+| `01_raw_image.jpg` | Raw camera frame |
+| `02_yolo_mask.jpg` | YOLO segmentation mask |
+| `03_overlay.jpg` | YOLO mask blended on camera |
+| `04_lidar_projected.jpg` | LiDAR points projected onto image |
+| `05_painted_scores.jpg` | Per-point painting score heatmap |
+| `06_detections.jpg` | FrustumDetector 3D boxes (camera + BEV) |
+| `07_tracked.jpg` | Tracked objects with IDs (camera + BEV) |
 
-The output images generated are:
-1. `01_raw_image.jpg`: The raw camera frame from the bag.
-2. `02_yolo_mask.jpg`: YOLO class segmentation mask.
-3. `03_overlay.jpg`: YOLO mask blended on top of the camera frame.
-4. `04_lidar_projected.jpg`: LiDAR points projected onto the image plane, colored by class.
-5. `05_painted_scores.jpg`: Heatmap representation of per-point painting scores.
-6. `06_detections.jpg`: Camera and Bird's Eye View (BEV) panels showing `FrustumDetector` 3D boxes.
-7. `07_tracked.jpg`: Camera and BEV panels showing tracked objects with tracking IDs.
-
-If `07_tracked.jpg` shows correct bounding boxes around the vehicles/pedestrians, the pipeline is fully functional!
-
+If `07_tracked.jpg` shows correct boxes, the pipeline is fully working.

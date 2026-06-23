@@ -94,6 +94,10 @@ class PaintingNode(Node):
                 'Pass: --ros-args -p calib_file:=/path/to/calib.txt'
             )
 
+        # --- Frame skip (run YOLO every Nth LiDAR frame to reduce CPU load) ---
+        self.declare_parameter('frame_skip', 3)
+        self._frame_skip = self.get_parameter('frame_skip').value
+
         # --- Segmentation model ---
         self.declare_parameter('checkpoint_path', '')
         checkpoint = self.get_parameter('checkpoint_path').get_parameter_value().string_value
@@ -129,6 +133,10 @@ class PaintingNode(Node):
         Process the latest LiDAR scan.
         Only runs YOLO segmentation on the cached camera frame if it is new.
         """
+        self._frame_count += 1
+        if self._frame_count % self._frame_skip != 0:
+            return
+
         if self._latest_img_msg is None:
             return
 
@@ -222,8 +230,7 @@ class PaintingNode(Node):
         yolo_msg.data = json.dumps(yolo_msg_payload)
         self._yolo_results_pub.publish(yolo_msg)
 
-        self._frame_count += 1
-        # Throttle verification overlays to every 5th LiDAR frame
+        # Throttle verification overlays to every 5th processed LiDAR frame
         if self._frame_count % 5 == 0:
             self._publish_segmentation_overlay(cv_image, seg_image, img_msg.header)
             self._publish_points_overlay(cv_image, xyz, class_ids, out_header)

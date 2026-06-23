@@ -70,3 +70,112 @@ cd /workspace/ros2_ws
 colcon build --symlink-install
 source install/setup.bash
 ```
+
+---
+
+## 🧠 Pipeline Architecture
+
+```
+Camera ──────────────────────────────────────────────────────┐
+                                                             ▼
+LiDAR ──► [PaintingNode] ──► scored_cloud ──► [FrustumNode] ──► 3D Boxes + Tracks
+               │                                    │
+               ▼                                    ▼
+          YOLO Segmentation               AB3DMOT Kalman Tracker
+```
+
+| Node | Package | Description |
+|---|---|---|
+| `painting_node` | `point_painting` | Runs YOLO11m-seg on camera frames, projects LiDAR onto image, labels each point with a semantic class score |
+| `frustum_node` | `frustum_detection` | Extracts 3D point frustums per YOLO box, clusters with DBSCAN, fits bounding boxes, tracks with AB3DMOT Kalman filter |
+| `metrics_logger_node` | `frustum_detection` | Subscribes to `/frustum/objects` and generates validation plots on shutdown |
+
+---
+
+## 📊 Validation Results
+
+Validation plots are generated automatically when the pipeline is stopped (Ctrl+C) and saved to `/workspace/metrics/`.
+
+| Plot | Description |
+|---|---|
+| `confidence_over_time.png` | Detection confidence score per track across frames — shows detection stability |
+| `track_lifetime.png` | How many frames each track stayed alive — shows tracking consistency |
+| `bev_trajectories.png` | Top-down path of every tracked object — shows spatial coverage |
+| `validation_summary.png` | Key metrics table: total frames, unique tracks, ID switches, mean confidence and speed per track |
+
+### Key metrics
+
+| Metric | Description |
+|---|---|
+| **Confidence score** | YOLO detection certainty — above 0.60 = high (green box), below = low (red box) |
+| **Track lifetime** | Number of frames a track was continuously maintained by the Kalman filter |
+| **ID switches** | How many times a tracked object was lost and re-assigned a new ID (lower is better) |
+| **Mean speed** | Average velocity estimated by the Kalman filter per track (m/s) |
+
+---
+
+## 📐 KITTI Benchmark Evaluation
+
+For quantitative detection and tracking metrics (Precision, Recall, F1, BEV IoU, MOTA, MOTP), the pipeline can be evaluated against the **KITTI Object Detection** dataset which provides ground truth 3D labels.
+
+> **Why KITTI?** The student dataset (`studentProject1`) has no ground truth annotations. KITTI is the standard autonomous driving benchmark used in research and provides ready-made labels for Cars, Pedestrians, and Cyclists.
+
+### Download KITTI data
+
+1. Go to [https://www.cvlibs.net/datasets/kitti/eval_object.php](https://www.cvlibs.net/datasets/kitti/eval_object.php)
+2. Download: **Left color images**, **Velodyne point clouds**, **Camera calibration**, **Training labels**
+3. Extract to `/workspace/kitti/` inside the container
+
+Expected structure:
+```
+/workspace/kitti/
+    image_2/     000000.png  000001.png  ...
+    velodyne/    000000.bin  000001.bin  ...
+    label_2/     000000.txt  000001.txt  ...
+    calib/       000000.txt  000001.txt  ...
+```
+
+### Run evaluation
+
+```bash
+python3 /workspace/evaluate_kitti.py --kitti_dir /workspace/kitti --output_dir /workspace/metrics
+```
+
+Quick test on first 50 frames:
+```bash
+python3 /workspace/evaluate_kitti.py --kitti_dir /workspace/kitti --max_frames 50
+```
+
+### Output
+
+Results are printed to terminal and saved as `kitti_evaluation.png` in `/workspace/metrics/`:
+
+| Metric | Description |
+|---|---|
+| **Precision** | Fraction of detections that matched a ground truth box (BEV IoU > 0.25) |
+| **Recall** | Fraction of ground truth objects that were detected |
+| **F1** | Harmonic mean of Precision and Recall |
+| **BEV IoU** | Mean Bird's Eye View overlap between predicted and ground truth boxes |
+| **MOTA** | Multi-Object Tracking Accuracy — combined measure of FP, FN, and ID switches |
+| **MOTP** | Multi-Object Tracking Precision — mean localisation error in metres |
+
+> **Note:** KITTI uses different sensors (HDL-64E LiDAR, urban roads) vs the student dataset (VLP-16, campus). Metrics reflect benchmark performance — qualitative results on the student dataset are shown via RViz2 and the live metrics plots.
+
+---
+
+## 🗂️ Repository Structure
+
+```
+AI-Based-Data-Fusion/
+├── .devcontainer/                  # Docker + VS Code Dev Container config
+├── ros2_ws/src/
+│   ├── point_painting/             # YOLO segmentation + PointPainting node
+│   ├── frustum_detection/          # Frustum 3D detection + tracking node
+│   │   └── launch/
+│   │       └── pipeline.launch.py  # Single launch file for full pipeline
+│   ├── perception_msgs/            # Custom ROS 2 message definitions
+│   └── perception_framework/       # Shared calibration utilities
+├── frustum_detection/              # Core detection library (no ROS)
+├── QUICKSTART.md                   # Step-by-step run guide
+└── README.md
+```

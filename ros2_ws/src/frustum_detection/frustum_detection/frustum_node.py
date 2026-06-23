@@ -160,6 +160,7 @@ class FrustumNode(Node):
         self._yolo_buffer      = {}         # stamp -> list of instance dicts
         self._img_buffer       = {}         # stamp -> Image msg
         self._frame_count      = 0
+        self._trajectories     = {}         # track_id -> list of (x, y, z)
 
         # ── Runtime stats for heartbeat ───────────────────────────────────────
         self._start_time      = time.monotonic()
@@ -180,6 +181,10 @@ class FrustumNode(Node):
             DiagnosticArray, '/frustum/diagnostics', 10)
         self._objects_pub = self.create_publisher(
             TrackedObjectArray, '/frustum/objects', 10)
+        self._traj_pub = self.create_publisher(
+            MarkerArray, '/frustum/trajectories', 10)
+        self._arrow_pub = self.create_publisher(
+            MarkerArray, '/frustum/velocity_arrows', 10)
 
         # 1 Hz diagnostics heartbeat timer
         self.create_timer(1.0, self._publish_diagnostics)
@@ -340,9 +345,19 @@ class FrustumNode(Node):
         self._last_trk_count  = len(tracked)
         self._last_tracked    = tracked     # snapshot for heartbeat
 
+        # ── Update trajectory history ─────────────────────────────────────────
+        for t in tracked:
+            tid = t.track_id
+            cx, cy, cz = float(t.box7[0]), float(t.box7[1]), float(t.box7[2])
+            if tid not in self._trajectories:
+                self._trajectories[tid] = []
+            self._trajectories[tid].append((cx, cy, cz))
+
         # ── Publish ───────────────────────────────────────────────────────────
         self._publish_markers(dets, tracked, msg.header)
         self._publish_objects(tracked, msg.header)
+        self._publish_trajectories(tracked, msg.header)
+        self._publish_velocity_arrows(tracked, msg.header)
         self._frame_count += 1
         if self._frame_count % 5 == 0:
             self._publish_bev(cv_bgr, dets, tracked, img_msg.header)
@@ -448,10 +463,16 @@ class FrustumNode(Node):
                 _wire_marker('frustum_dets', idx, corners, r, g, b, thickness=0.04)
             )
 
-        # ── Confirmed track boxes (thick, bright) + text labels ───────────────
+        # ── Confirmed track boxes (green=high, red=low) + text labels ───────────
         for t in tracked:
-            bgr = CLASS_COLORS_BGR.get(t.cls_id, (200, 200, 200))
-            r, g, b = bgr[2]/255., bgr[1]/255., bgr[0]/255.
+            conf = float(t.score) if t.score > 0 else 0.0
+            conf = max(0.0, min(1.0, conf))
+            if conf >= 0.6:
+                r, g, b = 0.0, 1.0, 0.0   # green — high confidence
+                conf_label = 'High'
+            else:
+                r, g, b = 1.0, 0.0, 0.0   # red — low confidence
+                conf_label = 'Low'
             corners = _corners_track(t)
 
             # Thick wireframe box
@@ -460,7 +481,7 @@ class FrustumNode(Node):
                              r, g, b, thickness=0.08)
             )
 
-            # Text label above the box: "Car ID:3"
+            # Text label above the box: "Car ID:3  0.89 High"
             cx, cy, cz = float(t.box7[0]), float(t.box7[1]), float(t.box7[2])
             dz         = float(t.box7[5])
             txt = Marker()
@@ -471,14 +492,14 @@ class FrustumNode(Node):
             txt.action   = Marker.ADD
             txt.pose.position.x = cx
             txt.pose.position.y = cy
-            txt.pose.position.z = cz + dz / 2.0 + 0.4   # above box top
+            txt.pose.position.z = cz + dz / 2.0 + 0.4
             txt.pose.orientation.w = 1.0
-            txt.scale.z  = 0.5        # text height in metres
+            txt.scale.z  = 0.5
             txt.color.r  = r
             txt.color.g  = g
             txt.color.b  = b
             txt.color.a  = 1.0
-            score_str = f' {t.score:.2f}' if t.score > 0 else ''
+            score_str = f' {t.score:.2f} {conf_label}' if t.score > 0 else ''
             txt.text  = f'{t.cls_name} ID:{t.track_id}{score_str}'
             marker_array.markers.append(txt)
 
@@ -522,6 +543,89 @@ class FrustumNode(Node):
             array_msg.objects.append(obj_msg)
             
         self._objects_pub.publish(array_msg)
+
+    def _publish_trajectories(self, tracked: list, header) -> None:
+        """Publish LINE_STRIP markers showing the path each track has taken."""
+        ma = MarkerArray()
+        clear = Marker()
+        clear.header = header
+        clear.ns     = 'frustum_trajectories'
+        clear.id     = 0
+        clear.action = Marker.DELETEALL
+        ma.markers.append(clear)
+
+        for tid, pts in self._trajectories.items():
+            if len(pts) < 2:
+                continue
+            # Each track gets a distinct fixed colour (white/cyan/magenta/orange/purple)
+            _TRAJ_COLOURS = [
+                (1.0, 1.0, 1.0),   # white
+                (0.0, 1.0, 1.0),   # cyan
+                (1.0, 0.0, 1.0),   # magenta
+                (1.0, 0.6, 0.0),   # orange
+                (0.5, 0.0, 1.0),   # purple
+            ]
+            r, g, b = _TRAJ_COLOURS[tid % len(_TRAJ_COLOURS)]
+
+            m = Marker()
+            m.header  = header
+            m.ns      = 'frustum_trajectories'
+            m.id      = tid
+            m.type    = Marker.LINE_STRIP
+            m.action  = Marker.ADD
+            m.scale.x = 0.06
+            m.color.r = r
+            m.color.g = g
+            m.color.b = b
+            m.color.a = 0.8
+            for px, py, pz in pts:
+                m.points.append(Point(x=px, y=py, z=pz))
+            ma.markers.append(m)
+
+        self._traj_pub.publish(ma)
+
+    def _publish_velocity_arrows(self, tracked: list, header) -> None:
+        """Publish ARROW markers showing Kalman filter velocity per track."""
+        ma = MarkerArray()
+        clear = Marker()
+        clear.header = header
+        clear.ns     = 'frustum_velocity'
+        clear.id     = 0
+        clear.action = Marker.DELETEALL
+        ma.markers.append(clear)
+
+        for t in tracked:
+            vx, vy, vz = float(t.velocity[0]), float(t.velocity[1]), float(t.velocity[2])
+            speed = (vx**2 + vy**2 + vz**2) ** 0.5
+            if speed < 0.05:
+                continue
+
+            cx, cy, cz = float(t.box7[0]), float(t.box7[1]), float(t.box7[2])
+            scale = min(speed * 1.5, 4.0)   # cap arrow length at 4 m
+
+            m = Marker()
+            m.header  = header
+            m.ns      = 'frustum_velocity'
+            m.id      = t.track_id
+            m.type    = Marker.ARROW
+            m.action  = Marker.ADD
+            m.scale.x = scale           # arrow length
+            m.scale.y = 0.15            # shaft diameter
+            m.scale.z = 0.25            # head diameter
+            m.color.r = 0.2
+            m.color.g = 0.8
+            m.color.b = 1.0
+            m.color.a = 0.9
+            # Arrow defined by two points: tail → tip
+            tail = Point(x=cx, y=cy, z=cz)
+            tip  = Point(x=cx + vx / max(speed, 1e-3) * scale,
+                         y=cy + vy / max(speed, 1e-3) * scale,
+                         z=cz + vz / max(speed, 1e-3) * scale)
+            m.points.append(tail)
+            m.points.append(tip)
+            ma.markers.append(m)
+
+        self._arrow_pub.publish(ma)
 
     # ── Diagnostics heartbeat (1 Hz) ──────────────────────────────────────────
 
@@ -592,6 +696,31 @@ class FrustumNode(Node):
                 f'conf={conf_str}'
             )
 
+    def _draw_confidence_legend(self, img: np.ndarray) -> np.ndarray:
+        """Overlay a confidence colour legend in the bottom-left corner."""
+        h, w = img.shape[:2]
+        legend_items = [
+            ((0, 200, 0),   'High confidence  (>= 0.60)'),
+            ((0, 0, 255),   'Low confidence   (< 0.60)'),
+            ((255, 200, 0), 'Cyan arrow = velocity direction'),
+        ]
+        box_w, box_h = 220, len(legend_items) * 22 + 12
+        x0, y0 = 8, h - box_h - 8
+
+        # Semi-transparent dark background
+        overlay = img.copy()
+        cv2.rectangle(overlay, (x0, y0), (x0 + box_w, y0 + box_h),
+                      (20, 20, 20), -1)
+        cv2.addWeighted(overlay, 0.6, img, 0.4, 0, img)
+
+        for i, (bgr, label) in enumerate(legend_items):
+            cy = y0 + 10 + i * 22
+            cv2.rectangle(img, (x0 + 6, cy), (x0 + 20, cy + 14), bgr, -1)
+            cv2.putText(img, label, (x0 + 26, cy + 11),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.38, (220, 220, 220), 1,
+                        cv2.LINE_AA)
+        return img
+
     def _publish_bev(
         self,
         cv_bgr: np.ndarray,
@@ -604,6 +733,7 @@ class FrustumNode(Node):
             cv_bgr, dets, self._projector, tracked,
             range_m=60.0, bev_size=700,
         )
+        panel = self._draw_confidence_legend(panel)
         bev_msg = self._bridge.cv2_to_imgmsg(panel, encoding='bgr8')
         bev_msg.header = header
         self._bev_pub.publish(bev_msg)
