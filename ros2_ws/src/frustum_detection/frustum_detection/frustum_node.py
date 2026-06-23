@@ -10,10 +10,12 @@ Pipeline per LiDAR scan
   4. Run FrustumDetector.detect() with the scored cloud → raw detections
   5. Apply NMS
   6. Update AB3DMOT tracker
-  7. Publish:
-       /frustum/markers      (visualization_msgs/MarkerArray) — 3D bounding boxes
-       /frustum/bev          (sensor_msgs/Image)              — BEV + camera panel
-       /frustum/debug        (std_msgs/String)                — detection counts
+   7. Publish:
+        /frustum/markers      (visualization_msgs/MarkerArray) — 3D bounding boxes
+        /frustum/bev          (sensor_msgs/Image)              — BEV + camera panel
+        /frustum/debug        (std_msgs/String)                — detection counts
+        /frustum/diagnostics  (diagnostic_msgs/DiagnosticArray)— heartbeat / pipeline health (1 Hz)
+        /frustum/yolo_detection (sensor_msgs/Image)            — YOLO boxes drawn on camera image
 
 Subscribed topics
 -----------------
@@ -36,13 +38,17 @@ import os
 
 import numpy as np
 import cv2
+import time
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Image, PointCloud2
 from std_msgs.msg import String
+from geometry_msgs.msg import Point
 from visualization_msgs.msg import Marker, MarkerArray
 from cv_bridge import CvBridge
 from sensor_msgs_py import point_cloud2 as pc2
+from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
+from perception_msgs.msg import TrackedObject as TrackedObjectMsg, TrackedObjectArray
 
 # Shared frustum_detection library (lives at repo root, added to sys.path by entrypoint)
 _WS = os.environ.get('COLCON_PREFIX_PATH', '').split(':')[0]
@@ -63,14 +69,39 @@ from frustum_detection import (
 from perception_framework.lidar_to_image_projection import KittiLidarToImageProjector
 
 
+# ── Mock YOLO wrappers to feed deserialized JSON results to FrustumDetector ────
+class MockTensor:
+    def __init__(self, data):
+        self._data = data
+    def cpu(self):
+        return self
+    def numpy(self):
+        return self._data
+
+class MockBoxes:
+    def __init__(self, cls_list, conf_list):
+        self.cls = MockTensor(np.array(cls_list))
+        self.conf = MockTensor(np.array(conf_list))
+
+class MockMasks:
+    def __init__(self, masks_list):
+        self.data = MockTensor(np.array(masks_list))
+
+class MockYoloResult:
+    def __init__(self, masks_list, cls_list, conf_list):
+        self.masks = MockMasks(masks_list) if masks_list else None
+        self.boxes = MockBoxes(cls_list, conf_list)
+
+
 class FrustumNode(Node):
     """
     ROS 2 node — Frustum-based 3D detection using PointPainting-scored clouds.
 
-    Subscribes to the /painting/scored_cloud topic published by PaintingNode and
-    the rectified camera image. For each incoming LiDAR scan it:
-      1. Re-runs YOLO on the latest camera frame (cached per unique stamp)
-      2. Passes scored cloud + YOLO results to FrustumDetector
+    Subscribes to the /painting/scored_cloud and /painting/yolo_results topics
+    published by PaintingNode, and the rectified camera image. For each incoming
+    LiDAR scan it:
+      1. Matches the camera image and the YOLO results using the exact timestamp
+      2. Reconstructs YOLO detections and passes them to FrustumDetector
       3. Publishes 3D bounding boxes as MarkerArray + BEV image
     """
 
@@ -105,16 +136,9 @@ class FrustumNode(Node):
                 'Pass: --ros-args -p calib_file:=/path/to/calib.txt'
             )
 
-        # ── YOLO model ────────────────────────────────────────────────────────
+        # ── YOLO model (Skipped in Optimized pipeline since YOLO runs in PaintingNode only) ──
         self._yolo_model = None
-        try:
-            from point_painting.segmentation.yolo_segmentation import load_model
-            self._yolo_model = load_model(checkpoint if checkpoint else None)
-            self.get_logger().info(
-                f'YOLO model loaded: {checkpoint or "yolo11n-seg.pt (default)"}'
-            )
-        except Exception as e:
-            self.get_logger().error(f'Failed to load YOLO model: {e}')
+        self.get_logger().info('Optimized pipeline: YOLO model loading skipped in FrustumNode.')
 
         # ── FrustumDetector + Tracker ─────────────────────────────────────────
         self._detector = FrustumDetector(
@@ -133,10 +157,17 @@ class FrustumNode(Node):
         # ── State ─────────────────────────────────────────────────────────────
         self._bridge           = CvBridge()
         self._latest_img_msg   = None
-        self._cached_stamp     = None
-        self._cached_yolo      = None       # YOLO results for cached stamp
-        self._cached_cv_bgr    = None       # OpenCV BGR image for visualisation
+        self._yolo_buffer      = {}         # stamp -> list of instance dicts
+        self._img_buffer       = {}         # stamp -> Image msg
         self._frame_count      = 0
+
+        # ── Runtime stats for heartbeat ───────────────────────────────────────
+        self._start_time      = time.monotonic()
+        self._last_frame_time = None
+        self._last_det_count  = 0
+        self._last_trk_count  = 0
+        self._fps_estimate    = 0.0
+        self._last_tracked    = []          # list[TrackedObject] from latest frame
 
         # ── Publishers ────────────────────────────────────────────────────────
         self._marker_pub = self.create_publisher(
@@ -145,56 +176,136 @@ class FrustumNode(Node):
             Image, '/frustum/bev', 10)
         self._debug_pub  = self.create_publisher(
             String, '/frustum/debug', 10)
+        self._diag_pub   = self.create_publisher(
+            DiagnosticArray, '/frustum/diagnostics', 10)
+        self._objects_pub = self.create_publisher(
+            TrackedObjectArray, '/frustum/objects', 10)
+
+        # 1 Hz diagnostics heartbeat timer
+        self.create_timer(1.0, self._publish_diagnostics)
 
         # ── Subscribers ───────────────────────────────────────────────────────
         self.create_subscription(
             Image, '/blackfly_s/cam0/image_rectified', self._img_cb, 10)
         self.create_subscription(
             PointCloud2, '/painting/scored_cloud', self._cloud_cb, 10)
+        self.create_subscription(
+            String, '/painting/yolo_results', self._yolo_results_cb, 10)
 
         self.get_logger().info('FrustumNode started — waiting for scored cloud...')
 
     # ── Callbacks ─────────────────────────────────────────────────────────────
 
     def _img_cb(self, msg: Image) -> None:
-        """Cache the latest camera frame."""
+        """Cache the latest camera frame and add it to the buffer."""
         self._latest_img_msg = msg
+        stamp = (msg.header.stamp.sec, msg.header.stamp.nanosec)
+        self._img_buffer[stamp] = msg
+        
+        # Prune buffer to keep it small (e.g. last 50 images)
+        if len(self._img_buffer) > 50:
+            oldest_stamp = min(self._img_buffer.keys(), key=lambda s: s[0] + s[1]*1e-9)
+            self._img_buffer.pop(oldest_stamp, None)
+
+    def _yolo_results_cb(self, msg: String) -> None:
+        """Receive serialized YOLO results from PaintingNode."""
+        import json
+        try:
+            payload = json.loads(msg.data)
+            sec = payload['stamp']['sec']
+            nanosec = payload['stamp']['nanosec']
+            stamp = (sec, nanosec)
+            self._yolo_buffer[stamp] = payload['instances']
+            
+            # Prune buffer to keep it small (e.g. last 50 entries)
+            if len(self._yolo_buffer) > 50:
+                oldest_stamp = min(self._yolo_buffer.keys(), key=lambda s: s[0] + s[1]*1e-9)
+                self._yolo_buffer.pop(oldest_stamp, None)
+        except Exception as e:
+            self.get_logger().error(f'Failed to parse YOLO JSON results: {e}')
 
     def _cloud_cb(self, msg: PointCloud2) -> None:
         """
-        Main callback: receive scored cloud, run FrustumDetector, publish results.
+        Main callback: receive scored cloud, retrieve matched YOLO results and image,
+        run FrustumDetector, and publish results.
         """
-        if self._projector is None or self._yolo_model is None:
-            return
-        if self._latest_img_msg is None:
+        if self._projector is None:
             return
 
-        img_msg = self._latest_img_msg
-        img_stamp = (img_msg.header.stamp.sec, img_msg.header.stamp.nanosec)
+        cloud_stamp = (msg.header.stamp.sec, msg.header.stamp.nanosec)
 
-        # ── Run YOLO only when image is new ───────────────────────────────────
-        if self._cached_stamp != img_stamp:
-            cv_image = self._bridge.imgmsg_to_cv2(
-                img_msg, desired_encoding='passthrough')
-            # Convert to BGR for visualisation
-            if cv_image.ndim == 2:
-                cv_bgr = cv2.cvtColor(cv_image, cv2.COLOR_GRAY2BGR)
+        # ── Retrieve matched image from buffer ────────────────────────────────
+        if cloud_stamp in self._img_buffer:
+            img_msg = self._img_buffer[cloud_stamp]
+        else:
+            # Fallback to closest image in buffer
+            t_cloud = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+            best_stamp = None
+            best_diff = float('inf')
+            for stamp, img in self._img_buffer.items():
+                t_img = stamp[0] + stamp[1] * 1e-9
+                diff = abs(t_cloud - t_img)
+                if diff < best_diff:
+                    best_diff = diff
+                    best_stamp = stamp
+            if best_stamp is not None and best_diff < 0.2:
+                img_msg = self._img_buffer[best_stamp]
             else:
-                cv_bgr = cv_image[..., ::-1].copy()   # RGB → BGR
-            img_rgb = cv_image[..., ::-1] if cv_image.ndim == 3 else \
-                      cv2.cvtColor(cv_image, cv2.COLOR_GRAY2RGB)
+                if self._latest_img_msg is None:
+                    return
+                img_msg = self._latest_img_msg
 
-            h, w = img_rgb.shape[:2]
-            yolo_results = self._yolo_model(
-                img_rgb, verbose=False, conf=0.40, imgsz=(h, w))
+        # ── Retrieve matched YOLO results from buffer ─────────────────────────
+        instances = []
+        if cloud_stamp in self._yolo_buffer:
+            instances = self._yolo_buffer[cloud_stamp]
+        else:
+            # Fallback to closest YOLO results in buffer
+            t_cloud = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+            best_stamp = None
+            best_diff = float('inf')
+            for stamp, insts in self._yolo_buffer.items():
+                t_yolo = stamp[0] + stamp[1] * 1e-9
+                diff = abs(t_cloud - t_yolo)
+                if diff < best_diff:
+                    best_diff = diff
+                    best_stamp = stamp
+            if best_stamp is not None and best_diff < 0.2:
+                instances = self._yolo_buffer[best_stamp]
 
-            self._cached_stamp  = img_stamp
-            self._cached_yolo   = yolo_results
-            self._cached_cv_bgr = cv_bgr
+        # Convert img_msg to OpenCV
+        cv_image = self._bridge.imgmsg_to_cv2(
+            img_msg, desired_encoding='passthrough')
+        # Convert to BGR for visualisation
+        if cv_image.ndim == 2:
+            cv_bgr = cv2.cvtColor(cv_image, cv2.COLOR_GRAY2BGR)
+        else:
+            cv_bgr = cv_image[..., ::-1].copy()   # RGB → BGR
+        h, w = cv_image.shape[:2]
+        img_shape = (h, w)
 
-        yolo_results = self._cached_yolo
-        cv_bgr       = self._cached_cv_bgr
-        img_shape    = cv_bgr.shape[:2]   # (H, W)
+        # ── Reconstruct YOLO results using Mock wrapper ───────────────────────
+        masks_list = []
+        cls_list = []
+        conf_list = []
+        for inst in instances:
+            cls_id = inst['class']
+            conf = inst['conf']
+            poly = inst['polygon']
+            
+            mask = np.zeros((h, w), dtype=np.float32)
+            if len(poly) > 0:
+                poly_np = np.array(poly, dtype=np.int32)
+                cv2.fillPoly(mask, [poly_np], 1.0)
+            
+            masks_list.append(mask)
+            cls_list.append(cls_id)
+            conf_list.append(conf)
+
+        if masks_list:
+            yolo_results = [MockYoloResult(masks_list, cls_list, conf_list)]
+        else:
+            yolo_results = []
 
         # ── Read scored cloud ─────────────────────────────────────────────────
         field_names = ('x', 'y', 'z', 'intensity', 'ring', 's_ped', 's_car', 's_cyc')
@@ -202,7 +313,8 @@ class FrustumNode(Node):
         if not raw:
             return
 
-        scored = np.array(raw, dtype=np.float32)   # (N, 8)
+        raw_arr = np.array(raw)
+        scored = raw_arr.view((np.float32, len(field_names)))   # (N, 8)
         lidar_filtered = scored                     # FrustumDetector uses cols 0-2
 
         # ── Detect ────────────────────────────────────────────────────────────
@@ -218,8 +330,19 @@ class FrustumNode(Node):
         # ── Track ─────────────────────────────────────────────────────────────
         tracked = self._tracker.update(dets)
 
+        # ── Update runtime stats for diagnostics ──────────────────────────────
+        now = time.monotonic()
+        if self._last_frame_time is not None:
+            dt = now - self._last_frame_time
+            self._fps_estimate = 0.8 * self._fps_estimate + 0.2 * (1.0 / max(dt, 1e-3))
+        self._last_frame_time = now
+        self._last_det_count  = len(dets)
+        self._last_trk_count  = len(tracked)
+        self._last_tracked    = tracked     # snapshot for heartbeat
+
         # ── Publish ───────────────────────────────────────────────────────────
         self._publish_markers(dets, tracked, msg.header)
+        self._publish_objects(tracked, msg.header)
         self._frame_count += 1
         if self._frame_count % 5 == 0:
             self._publish_bev(cv_bgr, dets, tracked, img_msg.header)
@@ -243,16 +366,27 @@ class FrustumNode(Node):
         header,
     ) -> None:
         """
-        Publish 3D bounding boxes as visualization_msgs/MarkerArray.
+        Publish 3D bounding boxes + track IDs as visualization_msgs/MarkerArray.
 
-        Each detection gets a LINE_LIST marker (wireframe box) coloured by class.
-        A DELETE_ALL marker is prepended to clear stale markers from the previous frame.
+        Namespaces:
+          'frustum_dets'    — thin wireframe boxes for raw detections (blue-ish)
+          'frustum_tracks'  — thick wireframe boxes for confirmed tracks
+          'frustum_labels'  — TEXT_VIEW_FACING markers: class name + track ID
+
+        A DELETE_ALL marker with the correct header is prepended each frame to
+        clear stale markers from the previous frame.
         """
+        # Ensure markers are published in the LiDAR frame so Foxglove can place
+        # them correctly in 3D space.  The scored-cloud header carries the
+        # LiDAR frame_id (typically 'velodyne').
         marker_array = MarkerArray()
 
-        # Clear previous markers
+        # DELETE_ALL must carry a valid header; ns='' means "all namespaces".
         clear = Marker()
-        clear.action = Marker.DELETEALL
+        clear.header    = header
+        clear.ns        = ''
+        clear.id        = 0
+        clear.action    = Marker.DELETEALL
         marker_array.markers.append(clear)
 
         _EDGES = [
@@ -261,46 +395,202 @@ class FrustumNode(Node):
             (0,4),(1,5),(2,6),(3,7),
         ]
 
-        def _corners(det: Detection3D):
+        def _corners_det(det: Detection3D) -> np.ndarray:
             c, s = np.cos(det.heading), np.sin(det.heading)
             hl, hw, hh = det.dx/2, det.dy/2, det.dz/2
             loc = np.array([
-                [ hl, hw,-hh],[ hl,-hw,-hh],[-hl,-hw,-hh],[-hl, hw,-hh],
-                [ hl, hw, hh],[ hl,-hw, hh],[-hl,-hw, hh],[-hl, hw, hh],
+                [ hl,  hw, -hh], [ hl, -hw, -hh], [-hl, -hw, -hh], [-hl,  hw, -hh],
+                [ hl,  hw,  hh], [ hl, -hw,  hh], [-hl, -hw,  hh], [-hl,  hw,  hh],
             ], dtype=np.float32)
-            R = np.array([[c,-s,0.],[s,c,0.],[0.,0.,1.]], dtype=np.float32)
+            R = np.array([[c, -s, 0.], [s, c, 0.], [0., 0., 1.]], dtype=np.float32)
             return (R @ loc.T).T + np.array([det.x, det.y, det.z])
 
-        for idx, det in enumerate(dets):
-            bgr = CLASS_COLORS_BGR.get(det.cls_id, (200, 200, 200))
-            r, g, b = bgr[2]/255., bgr[1]/255., bgr[0]/255.
+        def _corners_track(t) -> np.ndarray:
+            cx, cy, cz, dx, dy, dz, heading = t.box7
+            c, s = np.cos(heading), np.sin(heading)
+            hl, hw, hh = dx/2, dy/2, dz/2
+            loc = np.array([
+                [ hl,  hw, -hh], [ hl, -hw, -hh], [-hl, -hw, -hh], [-hl,  hw, -hh],
+                [ hl,  hw,  hh], [ hl, -hw,  hh], [-hl, -hw,  hh], [-hl,  hw,  hh],
+            ], dtype=np.float32)
+            R = np.array([[c, -s, 0.], [s, c, 0.], [0., 0., 1.]], dtype=np.float32)
+            return (R @ loc.T).T + np.array([cx, cy, cz])
 
+        def _wire_marker(ns: str, mid: int, corners: np.ndarray,
+                         r: float, g: float, b: float,
+                         thickness: float = 0.05) -> Marker:
             m = Marker()
-            m.header = header
-            m.ns     = 'frustum_dets'
-            m.id     = idx
-            m.type   = Marker.LINE_LIST
-            m.action = Marker.ADD
-            m.scale.x = 0.05
+            m.header  = header
+            m.ns      = ns
+            m.id      = mid
+            m.type    = Marker.LINE_LIST
+            m.action  = Marker.ADD
+            m.scale.x = thickness
             m.color.r = r
             m.color.g = g
             m.color.b = b
-            m.color.a = 0.9
-
-            corners = _corners(det)
+            m.color.a = 1.0
             for i, j in _EDGES:
-                from geometry_msgs.msg import Point
-                p0 = Point(x=float(corners[i,0]),
-                           y=float(corners[i,1]),
-                           z=float(corners[i,2]))
-                p1 = Point(x=float(corners[j,0]),
-                           y=float(corners[j,1]),
-                           z=float(corners[j,2]))
-                m.points.extend([p0, p1])
+                m.points.append(Point(x=float(corners[i, 0]),
+                                      y=float(corners[i, 1]),
+                                      z=float(corners[i, 2])))
+                m.points.append(Point(x=float(corners[j, 0]),
+                                      y=float(corners[j, 1]),
+                                      z=float(corners[j, 2])))
+            return m
 
-            marker_array.markers.append(m)
+        # ── Raw detection boxes (thin, dimmer) ────────────────────────────────
+        for idx, det in enumerate(dets):
+            bgr = CLASS_COLORS_BGR.get(det.cls_id, (200, 200, 200))
+            r, g, b = bgr[2]/255. * 0.5, bgr[1]/255. * 0.5, bgr[0]/255. * 0.5
+            corners = _corners_det(det)
+            marker_array.markers.append(
+                _wire_marker('frustum_dets', idx, corners, r, g, b, thickness=0.04)
+            )
+
+        # ── Confirmed track boxes (thick, bright) + text labels ───────────────
+        for t in tracked:
+            bgr = CLASS_COLORS_BGR.get(t.cls_id, (200, 200, 200))
+            r, g, b = bgr[2]/255., bgr[1]/255., bgr[0]/255.
+            corners = _corners_track(t)
+
+            # Thick wireframe box
+            marker_array.markers.append(
+                _wire_marker('frustum_tracks', t.track_id, corners,
+                             r, g, b, thickness=0.08)
+            )
+
+            # Text label above the box: "Car ID:3"
+            cx, cy, cz = float(t.box7[0]), float(t.box7[1]), float(t.box7[2])
+            dz         = float(t.box7[5])
+            txt = Marker()
+            txt.header   = header
+            txt.ns       = 'frustum_labels'
+            txt.id       = t.track_id
+            txt.type     = Marker.TEXT_VIEW_FACING
+            txt.action   = Marker.ADD
+            txt.pose.position.x = cx
+            txt.pose.position.y = cy
+            txt.pose.position.z = cz + dz / 2.0 + 0.4   # above box top
+            txt.pose.orientation.w = 1.0
+            txt.scale.z  = 0.5        # text height in metres
+            txt.color.r  = r
+            txt.color.g  = g
+            txt.color.b  = b
+            txt.color.a  = 1.0
+            score_str = f' {t.score:.2f}' if t.score > 0 else ''
+            txt.text  = f'{t.cls_name} ID:{t.track_id}{score_str}'
+            marker_array.markers.append(txt)
 
         self._marker_pub.publish(marker_array)
+
+    def _publish_objects(self, tracked: list, header) -> None:
+        """Publish confirmed tracks as a perception_msgs/TrackedObjectArray."""
+        array_msg = TrackedObjectArray()
+        array_msg.header = header
+        
+        for t in tracked:
+            obj_msg = TrackedObjectMsg()
+            obj_msg.track_id = int(t.track_id)
+            obj_msg.class_name = str(t.cls_name)
+            obj_msg.class_id = int(t.cls_id)
+            
+            # Position
+            obj_msg.position.x = float(t.box7[0])
+            obj_msg.position.y = float(t.box7[1])
+            obj_msg.position.z = float(t.box7[2])
+            
+            # Dimensions
+            obj_msg.size.x = float(t.box7[3])
+            obj_msg.size.y = float(t.box7[4])
+            obj_msg.size.z = float(t.box7[5])
+            
+            # Yaw angle
+            obj_msg.heading = float(t.box7[6])
+            
+            # Confidence
+            obj_msg.confidence = float(t.score)
+            
+            # Additional tracking parameters
+            obj_msg.is_predicted = bool(t.is_predicted)
+            
+            # Velocity: vx, vy, vz
+            obj_msg.velocity.x = float(t.velocity[0])
+            obj_msg.velocity.y = float(t.velocity[1])
+            obj_msg.velocity.z = float(t.velocity[2])
+            
+            array_msg.objects.append(obj_msg)
+            
+        self._objects_pub.publish(array_msg)
+
+    # ── Diagnostics heartbeat (1 Hz) ──────────────────────────────────────────
+
+    def _publish_diagnostics(self) -> None:
+        """
+        Publish a DiagnosticArray heartbeat every second.
+        Visible in Foxglove Studio → Diagnostics panel.
+        Allows the professor / team to distinguish visualization issues
+        from actual pipeline failures.
+        """
+        uptime_s = time.monotonic() - self._start_time
+
+        # Overall health level
+        if self._fps_estimate > 0.1 or self._frame_count == 0:
+            level   = DiagnosticStatus.OK
+            message = 'Pipeline running'
+        else:
+            level   = DiagnosticStatus.WARN
+            message = 'No frames received — check bag or painting_node'
+
+        status = DiagnosticStatus()
+        status.level   = level
+        status.name    = 'FrustumNode / Tracker'
+        status.message = message
+        status.hardware_id = 'frustum_node'
+        status.values  = [
+            KeyValue(key='uptime_s',         value=f'{uptime_s:.1f}'),
+            KeyValue(key='frames_total',     value=str(self._frame_count)),
+            KeyValue(key='fps_estimate',     value=f'{self._fps_estimate:.2f}'),
+            KeyValue(key='last_dets',        value=str(self._last_det_count)),
+            KeyValue(key='last_tracks',      value=str(self._last_trk_count)),
+            KeyValue(key='tracker_max_age',  value=str(self._tracker.max_age)),
+            KeyValue(key='tracker_min_hits', value=str(self._tracker.min_hits)),
+            KeyValue(key='tracker_iou_thr',  value=str(self._tracker.iou_thr)),
+            KeyValue(key='active_tracks',    value=str(len(self._tracker.tracks))),
+        ]
+        # One KeyValue per confirmed track (visible in Foxglove Diagnostics panel)
+        for t in self._last_tracked:
+            cx, cy, cz = float(t.box7[0]), float(t.box7[1]), float(t.box7[2])
+            status.values.append(KeyValue(
+                key=f'track_{t.track_id}',
+                value=(f'{t.cls_name} | '
+                       f'pos=({cx:+.1f},{cy:+.1f},{cz:+.1f})m | '
+                       f'conf={t.score:.2f}')
+            ))
+
+        arr = DiagnosticArray()
+        arr.header.stamp = self.get_clock().now().to_msg()
+        arr.status.append(status)
+        self._diag_pub.publish(arr)
+
+        # Terminal heartbeat: summary line then one indented line per tracked object
+        status_sym = '\u2713 OK  ' if level == DiagnosticStatus.OK else '\u26a0 WARN'
+        self.get_logger().info(
+            f'[HEARTBEAT] {status_sym} | '
+            f'uptime={uptime_s:.0f}s | '
+            f'frames={self._frame_count} | '
+            f'fps={self._fps_estimate:.2f} | '
+            f'dets={self._last_det_count} | '
+            f'tracks={self._last_trk_count}'
+        )
+        for t in self._last_tracked:
+            cx, cy, cz = float(t.box7[0]), float(t.box7[1]), float(t.box7[2])
+            conf_str = f'{t.score:.2f}' if t.score > 0 else 'n/a'
+            self.get_logger().info(
+                f'  \u2514 ID:{t.track_id:>3}  {t.cls_name:<11} '
+                f'pos=({cx:+.1f},{cy:+.1f},{cz:+.1f})m  '
+                f'conf={conf_str}'
+            )
 
     def _publish_bev(
         self,
