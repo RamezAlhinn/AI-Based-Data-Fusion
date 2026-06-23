@@ -1,0 +1,17 @@
+int32 track_id
+string class_name
+int32 class_id
+float32 x
+float32 y
+float32 z
+float32 dx
+float32 dy
+float32 dz
+float32 heading
+float32 confidence
+bool is_predicted
+int32 hits
+int32 age
+float32 vx
+float32 vy
+float32 vz

@@ -461,6 +461,10 @@ class TrackedObject:
     cls_name: str
     box7: np.ndarray   # [cx, cy, cz, dx, dy, dz, heading]
     score: float
+    hits: int = 1
+    age: int = 0
+    velocity: np.ndarray = field(default_factory=lambda: np.zeros(3))
+    is_predicted: bool = False
     _NAMES = {0: "Pedestrian", 1: "Cyclist", 2: "Car"}
 
 
@@ -559,12 +563,17 @@ class AB3DMOT:
             if trk.hits >= self.min_hits or self.frame_count <= self.min_hits:
                 di    = track_to_det.get(ti)
                 score = det_scores[di] if di is not None else 0.0
+                is_pred = (di is None)
                 confirmed.append(TrackedObject(
                     track_id=trk.track_id,
                     cls_id=trk.cls_id,
                     cls_name=TrackedObject._NAMES.get(trk.cls_id, str(trk.cls_id)),
                     box7=trk.box7,
                     score=score,
+                    hits=trk.hits,
+                    age=trk.no_match,
+                    velocity=trk.kf.x[7:10, 0].copy(),
+                    is_predicted=is_pred,
                 ))
         return confirmed
 

@@ -10,10 +10,12 @@ Pipeline per LiDAR scan
   4. Run FrustumDetector.detect() with the scored cloud → raw detections
   5. Apply NMS
   6. Update AB3DMOT tracker
-  7. Publish:
-       /frustum/markers      (visualization_msgs/MarkerArray) — 3D bounding boxes
-       /frustum/bev          (sensor_msgs/Image)              — BEV + camera panel
-       /frustum/debug        (std_msgs/String)                — detection counts
+   7. Publish:
+        /frustum/markers      (visualization_msgs/MarkerArray) — 3D bounding boxes
+        /frustum/bev          (sensor_msgs/Image)              — BEV + camera panel
+        /frustum/debug        (std_msgs/String)                — detection counts
+        /frustum/diagnostics  (diagnostic_msgs/DiagnosticArray)— heartbeat / pipeline health (1 Hz)
+        /frustum/yolo_detection (sensor_msgs/Image)            — YOLO boxes drawn on camera image
 
 Subscribed topics
 -----------------
@@ -36,6 +38,7 @@ import os
 
 import numpy as np
 import cv2
+import time
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Image, PointCloud2
@@ -44,6 +47,8 @@ from geometry_msgs.msg import Point
 from visualization_msgs.msg import Marker, MarkerArray
 from cv_bridge import CvBridge
 from sensor_msgs_py import point_cloud2 as pc2
+from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
+from perception_msgs.msg import TrackedObject as TrackedObjectMsg, TrackedObjectArray
 
 # Shared frustum_detection library (lives at repo root, added to sys.path by entrypoint)
 _WS = os.environ.get('COLCON_PREFIX_PATH', '').split(':')[0]
@@ -156,6 +161,14 @@ class FrustumNode(Node):
         self._img_buffer       = {}         # stamp -> Image msg
         self._frame_count      = 0
 
+        # ── Runtime stats for heartbeat ───────────────────────────────────────
+        self._start_time      = time.monotonic()
+        self._last_frame_time = None
+        self._last_det_count  = 0
+        self._last_trk_count  = 0
+        self._fps_estimate    = 0.0
+        self._last_tracked    = []          # list[TrackedObject] from latest frame
+
         # ── Publishers ────────────────────────────────────────────────────────
         self._marker_pub = self.create_publisher(
             MarkerArray, '/frustum/markers', 10)
@@ -163,6 +176,13 @@ class FrustumNode(Node):
             Image, '/frustum/bev', 10)
         self._debug_pub  = self.create_publisher(
             String, '/frustum/debug', 10)
+        self._diag_pub   = self.create_publisher(
+            DiagnosticArray, '/frustum/diagnostics', 10)
+        self._objects_pub = self.create_publisher(
+            TrackedObjectArray, '/frustum/objects', 10)
+
+        # 1 Hz diagnostics heartbeat timer
+        self.create_timer(1.0, self._publish_diagnostics)
 
         # ── Subscribers ───────────────────────────────────────────────────────
         self.create_subscription(
@@ -310,8 +330,19 @@ class FrustumNode(Node):
         # ── Track ─────────────────────────────────────────────────────────────
         tracked = self._tracker.update(dets)
 
+        # ── Update runtime stats for diagnostics ──────────────────────────────
+        now = time.monotonic()
+        if self._last_frame_time is not None:
+            dt = now - self._last_frame_time
+            self._fps_estimate = 0.8 * self._fps_estimate + 0.2 * (1.0 / max(dt, 1e-3))
+        self._last_frame_time = now
+        self._last_det_count  = len(dets)
+        self._last_trk_count  = len(tracked)
+        self._last_tracked    = tracked     # snapshot for heartbeat
+
         # ── Publish ───────────────────────────────────────────────────────────
         self._publish_markers(dets, tracked, msg.header)
+        self._publish_objects(tracked, msg.header)
         self._frame_count += 1
         if self._frame_count % 5 == 0:
             self._publish_bev(cv_bgr, dets, tracked, img_msg.header)
@@ -452,6 +483,116 @@ class FrustumNode(Node):
             marker_array.markers.append(txt)
 
         self._marker_pub.publish(marker_array)
+
+    def _publish_objects(self, tracked: list, header) -> None:
+        """Publish confirmed tracks as a perception_msgs/TrackedObjectArray."""
+        array_msg = TrackedObjectArray()
+        array_msg.header = header
+        
+        for t in tracked:
+            obj_msg = TrackedObjectMsg()
+            obj_msg.track_id = int(t.track_id)
+            obj_msg.class_name = str(t.cls_name)
+            obj_msg.class_id = int(t.cls_id)
+            
+            # Position
+            obj_msg.x = float(t.box7[0])
+            obj_msg.y = float(t.box7[1])
+            obj_msg.z = float(t.box7[2])
+            
+            # Dimensions
+            obj_msg.dx = float(t.box7[3])
+            obj_msg.dy = float(t.box7[4])
+            obj_msg.dz = float(t.box7[5])
+            
+            # Yaw angle
+            obj_msg.heading = float(t.box7[6])
+            
+            # Confidence
+            obj_msg.confidence = float(t.score)
+            
+            # Additional tracking parameters
+            obj_msg.is_predicted = bool(t.is_predicted)
+            obj_msg.hits = int(t.hits)
+            obj_msg.age = int(t.age)
+            
+            # Velocity: vx, vy, vz
+            obj_msg.vx = float(t.velocity[0])
+            obj_msg.vy = float(t.velocity[1])
+            obj_msg.vz = float(t.velocity[2])
+            
+            array_msg.objects.append(obj_msg)
+            
+        self._objects_pub.publish(array_msg)
+
+    # ── Diagnostics heartbeat (1 Hz) ──────────────────────────────────────────
+
+    def _publish_diagnostics(self) -> None:
+        """
+        Publish a DiagnosticArray heartbeat every second.
+        Visible in Foxglove Studio → Diagnostics panel.
+        Allows the professor / team to distinguish visualization issues
+        from actual pipeline failures.
+        """
+        uptime_s = time.monotonic() - self._start_time
+
+        # Overall health level
+        if self._fps_estimate > 0.1 or self._frame_count == 0:
+            level   = DiagnosticStatus.OK
+            message = 'Pipeline running'
+        else:
+            level   = DiagnosticStatus.WARN
+            message = 'No frames received — check bag or painting_node'
+
+        status = DiagnosticStatus()
+        status.level   = level
+        status.name    = 'FrustumNode / Tracker'
+        status.message = message
+        status.hardware_id = 'frustum_node'
+        status.values  = [
+            KeyValue(key='uptime_s',         value=f'{uptime_s:.1f}'),
+            KeyValue(key='frames_total',     value=str(self._frame_count)),
+            KeyValue(key='fps_estimate',     value=f'{self._fps_estimate:.2f}'),
+            KeyValue(key='last_dets',        value=str(self._last_det_count)),
+            KeyValue(key='last_tracks',      value=str(self._last_trk_count)),
+            KeyValue(key='tracker_max_age',  value=str(self._tracker.max_age)),
+            KeyValue(key='tracker_min_hits', value=str(self._tracker.min_hits)),
+            KeyValue(key='tracker_iou_thr',  value=str(self._tracker.iou_thr)),
+            KeyValue(key='active_tracks',    value=str(len(self._tracker.tracks))),
+        ]
+        # One KeyValue per confirmed track (visible in Foxglove Diagnostics panel)
+        for t in self._last_tracked:
+            cx, cy, cz = float(t.box7[0]), float(t.box7[1]), float(t.box7[2])
+            status.values.append(KeyValue(
+                key=f'track_{t.track_id}',
+                value=(f'{t.cls_name} | '
+                       f'pos=({cx:+.1f},{cy:+.1f},{cz:+.1f})m | '
+                       f'conf={t.score:.2f}')
+            ))
+
+        arr = DiagnosticArray()
+        arr.header.stamp = self.get_clock().now().to_msg()
+        arr.status.append(status)
+        self._diag_pub.publish(arr)
+
+        # Terminal heartbeat: summary line then one indented line per tracked object
+        status_sym = '\u2713 OK  ' if level == DiagnosticStatus.OK else '\u26a0 WARN'
+        self.get_logger().info(
+            f'[HEARTBEAT] {status_sym} | '
+            f'uptime={uptime_s:.0f}s | '
+            f'frames={self._frame_count} | '
+            f'fps={self._fps_estimate:.2f} | '
+            f'dets={self._last_det_count} | '
+            f'tracks={self._last_trk_count}'
+        )
+        for t in self._last_tracked:
+            cx, cy, cz = float(t.box7[0]), float(t.box7[1]), float(t.box7[2])
+            conf_str = f'{t.score:.2f}' if t.score > 0 else 'n/a'
+            self.get_logger().info(
+                f'  \u2514 ID:{t.track_id:>3}  {t.cls_name:<11} '
+                f'pos=({cx:+.1f},{cy:+.1f},{cz:+.1f})m  '
+                f'conf={conf_str}'
+            )
 
     def _publish_bev(
         self,
