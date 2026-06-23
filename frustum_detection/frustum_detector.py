@@ -143,17 +143,16 @@ class FrustumDetector:
 
     # (dbscan_eps_m, depth_max_m, depth_window_m) per COCO class.
     # depth_window_m: max range *from the nearest point* inside the frustum.
-    # Anything deeper than nearest_depth + window is background and discarded.
     _COCO_CFG: dict[int, tuple] = {
-        0: (1.5, 40.0,  3.0),   # person      — max ~0.5m thick; allow 3m window
-        1: (1.5, 40.0,  3.0),   # bicycle     — similar to person
-        2: (2.5, 80.0,  6.0),   # car         — up to 5m long; allow 6m window
-        3: (1.5, 40.0,  3.0),   # motorcycle  — thin object
-        5: (3.0, 80.0, 10.0),   # bus         — can be long
-        7: (3.0, 80.0,  8.0),   # truck       — longer than car
+        0: (1.5, 15.0,  3.0),   # person      — max ~0.5m thick; allow 3m window
+        1: (1.5, 20.0,  3.0),   # bicycle     — similar to person
+        2: (2.5, 50.0,  6.0),   # car         — up to 5m long; allow 6m window
+        3: (1.5, 20.0,  3.0),   # motorcycle  — thin object
+        5: (3.0, 50.0, 10.0),   # bus         — can be long
+        7: (3.0, 50.0,  8.0),   # truck       — longer than car
     }
     # TODO: set config params too large eps, depth_max, depth_window.   
-    _DEFAULT_CFG = (2.0, 60.0, 6.0)
+    _DEFAULT_CFG = (2.0, 30.0, 6.0)
 
     # Max allowed box dimensions (dx, dy, dz) per internal class (Ped/Cyc/Car).
     # Clamp prevents one bad frame from producing a warehouse-sized box.
