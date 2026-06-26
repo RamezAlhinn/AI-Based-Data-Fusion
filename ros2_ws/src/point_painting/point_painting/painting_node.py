@@ -230,10 +230,9 @@ class PaintingNode(Node):
         yolo_msg.data = json.dumps(yolo_msg_payload)
         self._yolo_results_pub.publish(yolo_msg)
 
-        # Throttle verification overlays to every 5th processed LiDAR frame
-        if self._frame_count % 5 == 0:
-            self._publish_segmentation_overlay(cv_image, seg_image, img_msg.header)
-            self._publish_points_overlay(cv_image, xyz, class_ids, out_header)
+        # Publish verification overlays on every processed frame (smooth, live viz at ~3.3 Hz)
+        self._publish_segmentation_overlay(cv_image, seg_image, self._latest_yolo_results, img_msg.header)
+        self._publish_points_overlay(cv_image, xyz, class_ids, out_header)
         if self._frame_count % 50 == 0:
             self.get_logger().info(
                 f'Frame {self._frame_count}: painted={painted}, skipped={skipped}')
@@ -257,33 +256,93 @@ class PaintingNode(Node):
         self._raw_aligned_pub.publish(aligned_msg)
 
     def _publish_segmentation_overlay(self, cv_image: np.ndarray,
-                                      seg_image: np.ndarray, header):
+                                      seg_image: np.ndarray,
+                                      yolo_results, header):
         """
         Blend YOLO class masks onto the camera image and publish.
 
         Useful for verifying that the segmentation model labels the correct
         objects before trusting the painted point cloud. Published on
-        /painting/segmentation_overlay at 1/5 of the node rate.
+        /painting/segmentation_overlay at every processed frame.
         """
         overlay = cv_image.copy() if cv_image.ndim == 3 else cv2.cvtColor(
             cv_image, cv2.COLOR_GRAY2BGR)
         colour_mask = np.zeros_like(overlay)
 
-        for class_id, (r, g, b) in CLASS_COLORS.items():
-            if class_id == -1:
-                continue
-            mask = seg_image == class_id
-            if not mask.any():
-                continue
-            if seg_image.shape != overlay.shape[:2]:
-                import cv2 as _cv2
-                mask_u8 = mask.astype(np.uint8) * 255
-                mask_u8 = _cv2.resize(mask_u8, (overlay.shape[1], overlay.shape[0]),
-                                      interpolation=_cv2.INTER_NEAREST)
-                mask = mask_u8 > 0
-            colour_mask[mask] = (b, g, r)  # BGR order for OpenCV
+        if yolo_results is not None:
+            for result in yolo_results:
+                if result.boxes is None:
+                    continue
+                classes = result.boxes.cls.cpu().numpy().astype(int)
+                confs = result.boxes.conf.cpu().numpy()
+                has_masks = result.masks is not None
+                masks_xy = result.masks.xy if has_masks else []
 
-        blended = cv2.addWeighted(overlay, 0.6, colour_mask, 0.4, 0)
+                for idx, (cls_id, conf) in enumerate(zip(classes, confs)):
+                    r, g, b = CLASS_COLORS.get(cls_id, UNPAINTED_COLOR)
+                    color_bgr = (b, g, r)
+
+                    if has_masks and idx < len(masks_xy):
+                        poly = masks_xy[idx].astype(np.int32)
+                        if len(poly) > 0:
+                            # Fill the mask region on colour_mask for translucent blending
+                            cv2.fillPoly(colour_mask, [poly], color_bgr)
+                            # Draw sharp boundary outline on overlay
+                            cv2.polylines(overlay, [poly], isClosed=True, color=color_bgr, thickness=2, lineType=cv2.LINE_AA)
+
+            blended = cv2.addWeighted(overlay, 0.7, colour_mask, 0.3, 0)
+
+            # Draw opaque bounding boxes and text labels on top of the blended image
+            for result in yolo_results:
+                if result.boxes is None:
+                    continue
+                boxes = result.boxes.xyxy.cpu().numpy()
+                classes = result.boxes.cls.cpu().numpy().astype(int)
+                confs = result.boxes.conf.cpu().numpy()
+                names = getattr(result, 'names', {})
+
+                for box, cls_id, conf in zip(boxes, classes, confs):
+                    x1, y1, x2, y2 = map(int, box)
+                    r, g, b = CLASS_COLORS.get(cls_id, UNPAINTED_COLOR)
+                    color_bgr = (b, g, r)
+
+                    # Draw fully opaque 2D bounding box
+                    cv2.rectangle(blended, (x1, y1), (x2, y2), color_bgr, 2, cv2.LINE_AA)
+
+                    # Format class name and confidence score
+                    cls_name = names.get(cls_id, f"class_{cls_id}")
+                    label = f"{cls_name} {conf:.2f}"
+
+                    font = cv2.FONT_HERSHEY_SIMPLEX
+                    font_scale = 0.45
+                    thickness = 1
+                    (tw, th), baseline = cv2.getTextSize(label, font, font_scale, thickness)
+
+                    # Position banner above the bounding box
+                    tx = x1
+                    ty = max(y1 - 4, th + 4)
+
+                    # Draw filled rectangle for banner background
+                    cv2.rectangle(blended, (tx, ty - th - 4), (tx + tw + 6, ty + baseline), color_bgr, -1)
+                    # Draw text label in white
+                    cv2.putText(blended, label, (tx + 3, ty - 2), font, font_scale, (255, 255, 255), thickness, cv2.LINE_AA)
+        else:
+            # Fallback simple mask rendering
+            for class_id, (r, g, b) in CLASS_COLORS.items():
+                if class_id == -1:
+                    continue
+                mask = seg_image == class_id
+                if not mask.any():
+                    continue
+                if seg_image.shape != overlay.shape[:2]:
+                    import cv2 as _cv2
+                    mask_u8 = mask.astype(np.uint8) * 255
+                    mask_u8 = _cv2.resize(mask_u8, (overlay.shape[1], overlay.shape[0]),
+                                          interpolation=_cv2.INTER_NEAREST)
+                    mask = mask_u8 > 0
+                colour_mask[mask] = (b, g, r)
+            blended = cv2.addWeighted(overlay, 0.7, colour_mask, 0.3, 0)
+
         overlay_msg = self._bridge.cv2_to_imgmsg(blended, encoding='bgr8')
         overlay_msg.header = header
         self._overlay_pub.publish(overlay_msg)
