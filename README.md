@@ -42,10 +42,18 @@ When you open the folder, VS Code will automatically detect the `.devcontainer` 
 
 ```
 AI-Based-Data-Fusion/
-├── .devcontainer/          # Docker + VS Code Dev Container configuration
-├── ros2_ws/
-│   └── src/                # Your ROS 2 packages will go here!
-├── .gitignore
+├── .devcontainer/                  # Docker + VS Code Dev Container config
+├── ros2_ws/src/
+│   ├── point_painting/             # YOLO segmentation + PointPainting node
+│   ├── frustum_detection/          # Frustum 3D detection + tracking node
+│   │   └── launch/
+│   │       └── pipeline.launch.py  # Single launch file for full pipeline
+│   ├── perception_msgs/            # Custom ROS 2 message definitions
+│   └── perception_framework/       # Shared calibration utilities
+├── frustum_detection/              # Core detection library (no ROS dependency)
+├── evaluate_kitti.py               # Offline KITTI benchmark evaluation script
+├── test_pipeline_isolation.py      # Single-frame offline pipeline test
+├── QUICKSTART.md                   # Step-by-step run guide
 └── README.md
 ```
 
@@ -53,15 +61,7 @@ AI-Based-Data-Fusion/
 
 ## 🤖 ROS 2 Workspace
 
-The `ros2_ws/` workspace is currently empty. This repository provides the clean infrastructure so you can start creating packages immediately without worrying about dependencies or environment setup.
-
-### Creating your first package
-
-Open the VS Code terminal (`Ctrl + ~`) and run:
-```bash
-cd /workspace/ros2_ws/src
-ros2 pkg create --build-type ament_cmake my_first_package
-```
+The `ros2_ws/` workspace contains four packages. See the **QUICKSTART.md** for full run instructions.
 
 ### Building the workspace
 
@@ -175,7 +175,9 @@ AI-Based-Data-Fusion/
 │   │       └── pipeline.launch.py  # Single launch file for full pipeline
 │   ├── perception_msgs/            # Custom ROS 2 message definitions
 │   └── perception_framework/       # Shared calibration utilities
-├── frustum_detection/              # Core detection library (no ROS)
+├── frustum_detection/              # Core detection library (no ROS dependency)
+├── evaluate_kitti.py               # Offline KITTI benchmark evaluation script
+├── test_pipeline_isolation.py      # Single-frame offline pipeline test
 ├── QUICKSTART.md                   # Step-by-step run guide
 └── README.md
 ```

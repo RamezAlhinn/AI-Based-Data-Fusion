@@ -30,3 +30,10 @@ isolation_output/
 
 # Scratch and local scripts
 scratch/
+
+# Runtime output directories (generated at runtime, not source)
+metrics/
+video_output/
+
+# Generated tool output
+repomix-output.xml
