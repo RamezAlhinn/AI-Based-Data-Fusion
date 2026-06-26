@@ -103,7 +103,21 @@ Validation plots are generated automatically when the pipeline is stopped (Ctrl+
 | `bev_trajectories.png` | Top-down path of every tracked object — shows spatial coverage |
 | `validation_summary.png` | Key metrics table: total frames, unique tracks, ID switches, mean confidence and speed per track |
 
-### Key metrics
+### Measured results (student dataset, full bag, `bag_rate:=1.0`)
+
+The following results were obtained by running the complete pipeline on the `studentProject1` ROS 2 bag (16 seconds, 162 camera frames, 164 LiDAR scans):
+
+| Metric | Value | Notes |
+|---|---|---|
+| **Total frames processed** | 111 | Frames received by `frustum_node` after sync |
+| **Total unique tracks** | 6 | 1 persistent + 5 short-lived noise tracks |
+| **ID switches** | **0** | No identity confusion across the full run |
+| **Primary track lifetime** | **87 frames** | Pedestrian ID:4 — 78% of total frames |
+| **Primary track mean confidence** | 0.58 | Consistently above YOLO detection threshold |
+| **Primary track mean speed** | 0.06 m/s | Near-stationary pedestrian directly ahead (~14 m) |
+| **Short-lived tracks** | 5 × 4 frames | False positives from noise; eliminated by raising `min_hits` |
+
+### Key metrics explained
 
 | Metric | Description |
 |---|---|
@@ -111,6 +125,17 @@ Validation plots are generated automatically when the pipeline is stopped (Ctrl+
 | **Track lifetime** | Number of frames a track was continuously maintained by the Kalman filter |
 | **ID switches** | How many times a tracked object was lost and re-assigned a new ID (lower is better) |
 | **Mean speed** | Average velocity estimated by the Kalman filter per track (m/s) |
+
+### Tuning recommendations
+
+To reduce the 5 short-lived false-positive tracks, increase `min_hits` in the launch command:
+
+```bash
+ros2 launch frustum_detection pipeline.launch.py bag_rate:=1.0 \
+    --ros-args -p frustum_node:min_hits:=5
+```
+
+This requires 5 consecutive matched detections before a track is confirmed, filtering out brief noise bursts that last only 3 frames.
 
 ---
 
