@@ -90,9 +90,9 @@ These parameters dictate how tracks are initialized, matched, predicted, and del
 * **`max_age`** *(ROS Parameter: `max_age` | Default: `3` frames)*:
   * **Description:** The maximum number of consecutive frames a track can go unmatched before being deleted.
   * **Impact:** Helps maintain track continuity through temporary occlusion. Increasing this keeps tracks alive longer but can cause "ghost tracks" to linger after an object has left the field of view.
-* **`min_hits`** *(ROS Parameter: `min_hits` | Default: `3` frames)*:
+* **`min_hits`** *(ROS Parameter: `min_hits` | Default: `5` frames)*:
   * **Description:** The number of consecutive frame updates a track must receive to be confirmed and published.
-  * **Impact:** Filters out brief, spurious detections. A lower value confirms tracks faster but increases false positives.
+  * **Impact:** Filters out brief, spurious detections (e.g. noise bursts that last only 3 frames). A lower value confirms tracks faster but increases false positives. The default of `5` was chosen based on validation runs showing that noise tracks consistently lasted exactly 3–4 frames.
 * **Gating Distance Fallback** *(Implemented in [_assoc_cost](file:///workspace/frustum_detection/frustum_detector.py#L476-L485))*:
   * **Description:** If a track cannot achieve the `iou_threshold` (e.g., due to coordinate mismatches or rapid motion), it checks if the Euclidean center-distance is smaller than the detection's footprint radius: `gate = (length + width) / 2`. If so, they are matched with a fallback cost.
 * **Kalman Filter Covariances (`_Q` and `_R`)** *(Defined in [KalmanBox3D](file:///workspace/frustum_detection/frustum_detector.py#L391-L432))*:

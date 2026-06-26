@@ -29,7 +29,7 @@ Parameters
   conf_thr          (float) — YOLO confidence threshold (default: 0.40)
   min_pts           (int)   — min LiDAR points inside frustum (default: 4)
   max_age           (int)   — tracker max_age (default: 3)
-  min_hits          (int)   — tracker min_hits to confirm (default: 3)
+  min_hits          (int)   — tracker min_hits to confirm (default: 5)
   nms_dist          (float) — NMS BEV distance threshold (default: 1.0)
 """
 
@@ -114,7 +114,7 @@ class FrustumNode(Node):
         self.declare_parameter('conf_thr',        0.40)
         self.declare_parameter('min_pts',         4)
         self.declare_parameter('max_age',         3)
-        self.declare_parameter('min_hits',        3)
+        self.declare_parameter('min_hits',        5)
         self.declare_parameter('nms_dist',        1.0)
 
         calib_file    = self.get_parameter('calib_file').value

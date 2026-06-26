@@ -126,16 +126,21 @@ The following results were obtained by running the complete pipeline on the `stu
 | **ID switches** | How many times a tracked object was lost and re-assigned a new ID (lower is better) |
 | **Mean speed** | Average velocity estimated by the Kalman filter per track (m/s) |
 
-### Tuning recommendations
+### Noise track filtering
 
-To reduce the 5 short-lived false-positive tracks, increase `min_hits` in the launch command:
+**`min_hits` is set to `5` by default** in `frustum_node`. This means the tracker requires 5 consecutive matched detections before a track is confirmed as real, filtering out brief noise bursts (e.g. reflections causing a 3-frame false positive).
+
+You can tune this at runtime without rebuilding:
 
 ```bash
+# Stricter (fewer false tracks, slower to confirm new objects)
 ros2 launch frustum_detection pipeline.launch.py bag_rate:=1.0 \
-    --ros-args -p frustum_node:min_hits:=5
-```
+    --ros-args -p frustum_node:min_hits:=7
 
-This requires 5 consecutive matched detections before a track is confirmed, filtering out brief noise bursts that last only 3 frames.
+# More permissive (faster confirmation, more false positives)
+ros2 launch frustum_detection pipeline.launch.py bag_rate:=1.0 \
+    --ros-args -p frustum_node:min_hits:=3
+```
 
 ---
 
